@@ -1,16 +1,20 @@
+import fs from 'node:fs';
 import { spawn, ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import path from 'node:path';
 import { createInterface } from 'node:readline';
 import { WebSocket } from 'ws';
 
 const HUB_URL = process.env.HUB_URL || 'ws://localhost:8090/ws/agent';
 const AUTH_TOKEN = process.env.AUTH_TOKEN || 'dev-secret-token';
 const CLAUDE_BIN = process.env.CLAUDE_BIN || '/Users/s-ikari/.local/bin/claude';
-const DEFAULT_CWD = process.env.DEFAULT_CWD || process.cwd();
+const currentDir = process.cwd();
+const DEFAULT_CWD = process.env.DEFAULT_CWD || (currentDir.endsWith('/packages/agent') ? path.resolve(currentDir, '../..') : currentDir);
 
 let ws: WebSocket | null = null;
 let reconnectTimer: NodeJS.Timeout | null = null;
 let currentChildProcess: ChildProcess | null = null;
+const knownSessions = new Set<string>();
 
 console.log('=== AI Remote Bridge Agent ===');
 console.log(`Target Hub: ${HUB_URL}`);
@@ -75,6 +79,50 @@ function sendToHub(payload: any) {
 }
 
 /**
+ * 社内PC上のワークスペース/プロジェクト候補を走査
+ */
+function scanProjects(customRoot?: string) {
+  const scanDir = customRoot || process.env.PROJECTS_ROOT || path.resolve(DEFAULT_CWD, '..');
+  const projects: Array<{ id: string; name: string; path: string; isGit: boolean }> = [];
+
+  try {
+    if (fs.existsSync(scanDir)) {
+      const entries = fs.readdirSync(scanDir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (entry.isDirectory() && !entry.name.startsWith('.') && entry.name !== 'node_modules') {
+          const fullPath = path.join(scanDir, entry.name);
+          const isGit = fs.existsSync(path.join(fullPath, '.git'));
+          projects.push({
+            id: entry.name,
+            name: entry.name,
+            path: fullPath,
+            isGit
+          });
+        }
+      }
+    }
+  } catch (err: any) {
+    console.error('[Agent] Failed to scan projects directory:', err.message);
+  }
+
+  // もし DEFAULT_CWD が候補に含まれていなければ先頭に追加
+  const currentName = path.basename(DEFAULT_CWD);
+  if (!projects.some(p => p.path === DEFAULT_CWD)) {
+    projects.unshift({
+      id: currentName,
+      name: currentName,
+      path: DEFAULT_CWD,
+      isGit: fs.existsSync(path.join(DEFAULT_CWD, '.git'))
+    });
+  }
+
+  return {
+    baseDir: scanDir,
+    projects
+  };
+}
+
+/**
  * Client からのメッセージ処理
  */
 function handleClientMessage(msg: any) {
@@ -90,6 +138,14 @@ function handleClientMessage(msg: any) {
       hostname: process.env.HOSTNAME || 'MacBook',
       cwd: DEFAULT_CWD,
       isBusy: currentChildProcess !== null,
+      timestamp: new Date().toISOString()
+    });
+  } else if (msg.type === 'list_projects') {
+    const result = scanProjects(msg.rootPath);
+    sendToHub({
+      type: 'projects_list',
+      baseDir: result.baseDir,
+      projects: result.projects,
       timestamp: new Date().toISOString()
     });
   } else {
@@ -117,6 +173,7 @@ function abortCurrentTurn() {
 function executeClaudeTurn(params: {
   text: string;
   sessionId?: string;
+  isResume?: boolean;
   cwd?: string;
   permissionMode?: string;
 }) {
@@ -130,39 +187,45 @@ function executeClaudeTurn(params: {
   }
 
   const prompt = params.text;
-  const isResume = Boolean(params.sessionId);
   const activeSessionId = params.sessionId || randomUUID();
+  // isResume が明示されていなければ knownSessions にあるか判定（未記録なら初回なので false）
+  const initialResume = params.isResume !== undefined
+    ? params.isResume
+    : Boolean(params.sessionId && knownSessions.has(params.sessionId));
   const workDir = params.cwd || DEFAULT_CWD;
   const permissionMode = params.permissionMode || 'acceptEdits';
 
-  const args: string[] = [
-    '-p',
-    prompt,
-    '--output-format=stream-json',
-    '--include-partial-messages',
-    '--verbose',
-    `--permission-mode=${permissionMode}`
-  ];
+  const runProcess = (resumeMode: boolean) => {
+    const args: string[] = [
+      '-p',
+      prompt,
+      '--output-format=stream-json',
+      '--include-partial-messages',
+      '--verbose',
+      `--permission-mode=${permissionMode}`
+    ];
 
-  if (isResume) {
-    args.push('--resume', activeSessionId);
-  } else {
-    args.push('--session-id', activeSessionId);
-  }
+    if (resumeMode) {
+      args.push('--resume', activeSessionId);
+    } else {
+      args.push('--session-id', activeSessionId);
+    }
 
-  console.log(`[Agent] Launching Claude: ${CLAUDE_BIN} ${args.join(' ')}`);
-  console.log(`[Agent] Session ID: ${activeSessionId} (isResume: ${isResume})`);
-  console.log(`[Agent] Working dir: ${workDir}`);
+    console.log(`[Agent] Launching Claude: ${CLAUDE_BIN} ${args.join(' ')}`);
+    console.log(`[Agent] Session ID: ${activeSessionId} (isResume: ${resumeMode})`);
+    console.log(`[Agent] Working dir: ${workDir}`);
 
-  sendToHub({
-    type: 'turn_start',
-    prompt,
-    sessionId: activeSessionId,
-    cwd: workDir,
-    timestamp: new Date().toISOString()
-  });
+    sendToHub({
+      type: 'turn_start',
+      prompt,
+      sessionId: activeSessionId,
+      cwd: workDir,
+      timestamp: new Date().toISOString()
+    });
 
-  try {
+    let hasOutput = false;
+    let resumeNotFound = false;
+
     const child = spawn(CLAUDE_BIN, args, {
       cwd: workDir,
       env: {
@@ -183,20 +246,19 @@ function executeClaudeTurn(params: {
 
       try {
         const event = JSON.parse(trimmed);
+        hasOutput = true;
 
-        // session_id の自動キャッチ
         if (event.session_id && !capturedSessionId) {
           capturedSessionId = event.session_id;
         }
+        knownSessions.add(capturedSessionId);
 
-        // Hub 経由で Client へ生イベントを転送
         sendToHub({
           type: 'claude_event',
           sessionId: capturedSessionId,
           event
         });
       } catch (err) {
-        // 万が一非JSON行が出力された場合はログとして送信
         console.warn('[Agent] Non-JSON stdout line:', trimmed);
         sendToHub({
           type: 'claude_raw_log',
@@ -210,6 +272,9 @@ function executeClaudeTurn(params: {
     const readlineStderr = createInterface({ input: child.stderr });
     readlineStderr.on('line', (line) => {
       console.warn('[Agent] stderr:', line);
+      if (line.includes('No conversation found with session ID')) {
+        resumeNotFound = true;
+      }
       sendToHub({
         type: 'claude_raw_log',
         stream: 'stderr',
@@ -220,6 +285,18 @@ function executeClaudeTurn(params: {
     child.on('close', (code, signal) => {
       console.log(`[Agent] Claude process exited with code ${code}, signal ${signal}`);
       currentChildProcess = null;
+
+      // もし --resume で過去セッションが見つからずに即終了した場合、--session-id で自動フォールバック再試行！
+      if (resumeMode && resumeNotFound && !hasOutput) {
+        console.warn(`[Agent] Session ${activeSessionId} not found to resume. Falling back to fresh --session-id...`);
+        knownSessions.delete(activeSessionId);
+        runProcess(false);
+        return;
+      }
+
+      if (code === 0) {
+        knownSessions.add(capturedSessionId);
+      }
 
       sendToHub({
         type: 'turn_end',
@@ -240,7 +317,10 @@ function executeClaudeTurn(params: {
         timestamp: new Date().toISOString()
       });
     });
+  };
 
+  try {
+    runProcess(initialResume);
   } catch (err: any) {
     console.error('[Agent] Execution exception:', err);
     currentChildProcess = null;

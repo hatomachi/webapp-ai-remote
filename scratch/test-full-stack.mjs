@@ -84,11 +84,14 @@ async function runFullStackTest() {
     isBusy: agentStatusMsg.isBusy,
   });
 
-  // Step 4: クライアントからの prompt 送信とストリーム受信テスト
-  console.log('\n=== Step 4: Testing prompt execution and stream reception ===');
+  // Step 4: クライアントからの prompt 送信（新規セッションID付き）
+  const testSessionId = (await import('node:crypto')).randomUUID();
+  console.log(`\n=== Step 4: Testing prompt execution with brand new sessionId (${testSessionId}) ===`);
   clientWs.send(JSON.stringify({
     type: 'prompt',
     text: "Echo exactly 'Hello from AI Remote Cockpit' and nothing else.",
+    sessionId: testSessionId,
+    isResume: false,
   }));
 
   // turn_end を待機

@@ -12,9 +12,11 @@ import {
   SessionInfo,
   PermissionMode,
   ToolUseItem,
+  ProjectInfo,
 } from './types/protocol';
 
 const SESSIONS_STORAGE_KEY = 'ai_remote_sessions_v1';
+const PROJECTS_STORAGE_KEY = 'ai_remote_projects_v1';
 const MESSAGES_STORAGE_PREFIX = 'ai_remote_msgs_';
 
 function generateUUID(): string {
@@ -29,6 +31,30 @@ function generateUUID(): string {
 }
 
 export function App() {
+  // --- プロジェクト一覧 & カレントプロジェクト ---
+  const [projects, setProjects] = useState<ProjectInfo[]>(() => {
+    try {
+      const saved = localStorage.getItem(PROJECTS_STORAGE_KEY);
+      if (saved) return JSON.parse(saved);
+    } catch (e) {
+      console.error(e);
+    }
+    return [];
+  });
+
+  const [currentProject, setCurrentProject] = useState<ProjectInfo | null>(() => {
+    try {
+      const saved = localStorage.getItem(PROJECTS_STORAGE_KEY);
+      if (saved) {
+        const list = JSON.parse(saved);
+        if (list.length > 0) return list[0];
+      }
+    } catch (e) {
+      console.error(e);
+    }
+    return null;
+  });
+
   // --- セッション一覧 & カレントセッション ---
   const [sessions, setSessions] = useState<SessionInfo[]>(() => {
     try {
@@ -104,7 +130,8 @@ export function App() {
             {
               id: currentSessionId,
               title,
-              cwd: currentCwd,
+              cwd: currentProject?.path || currentCwd,
+              projectId: currentProject?.id || (currentCwd ? currentCwd.split('/').filter(Boolean).pop() : undefined),
               createdAt: new Date().toISOString(),
               updatedAt: new Date().toISOString(),
               messageCount: messages.length,
@@ -118,7 +145,7 @@ export function App() {
     } catch (e) {
       console.error('Failed to save session messages', e);
     }
-  }, [messages, currentSessionId, currentCwd]);
+  }, [messages, currentSessionId, currentCwd, currentProject]);
 
   // --- 受信イベントのディスパッチ処理 ---
   const handleInboundMessage = useCallback(
@@ -350,17 +377,76 @@ export function App() {
     agentHostname,
     agentCwd,
     isExecuting,
+    availableProjects,
+    projectsBaseDir,
+    requestProjects,
     sendPrompt,
     abort,
   } = useRemoteSocket(handleInboundMessage);
 
-  // 初回に agentCwd または defaultCwd を currentCwd にセット
+  // PC側から利用可能なプロジェクト候補が取得された時、未登録なら自動登録
   useEffect(() => {
-    if (!currentCwd) {
-      if (agentCwd) setCurrentCwd(agentCwd);
-      else if (settings.defaultCwd) setCurrentCwd(settings.defaultCwd);
+    if (availableProjects.length > 0 && projects.length === 0) {
+      setProjects(availableProjects);
+      localStorage.setItem(PROJECTS_STORAGE_KEY, JSON.stringify(availableProjects));
+      if (!currentProject) {
+        setCurrentProject(availableProjects[0]);
+        setCurrentCwd(availableProjects[0].path);
+      }
     }
-  }, [agentCwd, settings.defaultCwd, currentCwd]);
+  }, [availableProjects, projects.length, currentProject]);
+
+  // 初回に agentCwd または defaultCwd から currentProject を補正
+  useEffect(() => {
+    if (!currentProject && (agentCwd || settings.defaultCwd)) {
+      const activePath = agentCwd || settings.defaultCwd;
+      const name = activePath.split('/').filter(Boolean).pop() || 'Project';
+      const initialProj: ProjectInfo = { id: name, name, path: activePath };
+      setCurrentProject(initialProj);
+      setCurrentCwd(activePath);
+      setProjects((prev) => {
+        if (!prev.some((p) => p.path === activePath)) {
+          const next = [initialProj, ...prev];
+          localStorage.setItem(PROJECTS_STORAGE_KEY, JSON.stringify(next));
+          return next;
+        }
+        return prev;
+      });
+    }
+  }, [agentCwd, settings.defaultCwd, currentProject]);
+
+  // --- プロジェクト操作 ---
+  const handleSelectProject = (project: ProjectInfo) => {
+    setCurrentProject(project);
+    setCurrentCwd(project.path);
+    // そのプロジェクトの既存セッションを探す
+    const existing = sessions.find((s) => s.projectId === project.id || s.cwd === project.path);
+    if (existing) {
+      setCurrentSessionId(existing.id);
+    } else {
+      handleNewSession(project.path);
+    }
+  };
+
+  const handleAddProject = (project: ProjectInfo) => {
+    setProjects((prev) => {
+      if (prev.some((p) => p.path === project.path)) return prev;
+      const next = [project, ...prev];
+      localStorage.setItem(PROJECTS_STORAGE_KEY, JSON.stringify(next));
+      return next;
+    });
+  };
+
+  const handleRemoveProject = (projectId: string) => {
+    setProjects((prev) => {
+      const next = prev.filter((p) => p.id !== projectId);
+      localStorage.setItem(PROJECTS_STORAGE_KEY, JSON.stringify(next));
+      if (currentProject?.id === projectId && next.length > 0) {
+        handleSelectProject(next[0]);
+      }
+      return next;
+    });
+  };
 
   // --- 自動スクロール ---
   const scrollToBottom = useCallback((force = false) => {
@@ -402,15 +488,18 @@ export function App() {
     isAutoScrollEnabled.current = true;
     scrollToBottom(true);
 
+    const isResume = messages.some((m) => m.role === 'assistant' && !m.isError);
+
     // WebSocket で Agent に送信
-    sendPrompt(text, currentSessionId, currentCwd || undefined, permissionMode);
+    sendPrompt(text, currentSessionId, isResume, currentCwd || currentProject?.path || undefined, permissionMode);
   };
 
   // --- 新規セッション開始 ---
   const handleNewSession = (newCwd?: string) => {
     const newId = generateUUID();
     setCurrentSessionId(newId);
-    if (newCwd) setCurrentCwd(newCwd);
+    const targetCwd = newCwd || currentProject?.path || currentCwd;
+    if (targetCwd) setCurrentCwd(targetCwd);
     setMessages([]);
   };
 
@@ -555,17 +644,24 @@ export function App() {
         </div>
       </footer>
 
-      {/* セッション履歴ドロワー */}
+      {/* セッション & プロジェクト履歴ドロワー */}
       <SessionDrawer
         isOpen={isDrawerOpen}
         onClose={() => setIsDrawerOpen(false)}
+        projects={projects}
+        currentProject={currentProject}
+        onSelectProject={handleSelectProject}
+        onAddProject={handleAddProject}
+        onRemoveProject={handleRemoveProject}
+        availableProjects={availableProjects}
+        projectsBaseDir={projectsBaseDir}
+        onRequestScanProjects={requestProjects}
         sessions={sessions}
         currentSessionId={currentSessionId}
         onSelectSession={(id) => setCurrentSessionId(id)}
-        onNewSession={handleNewSession}
+        onNewSession={() => handleNewSession()}
         onDeleteSession={handleDeleteSession}
-        currentCwd={currentCwd}
-        defaultCwd={settings.defaultCwd || agentCwd}
+        isAgentConnected={isAgentConnected}
       />
 
       {/* 設定モーダル */}

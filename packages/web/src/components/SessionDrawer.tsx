@@ -1,38 +1,87 @@
 import React, { useState } from 'react';
-import { X, Plus, FolderGit2, Trash2, MessageSquare, Clock, Check } from 'lucide-react';
-import { SessionInfo } from '../types/protocol';
+import {
+  X,
+  Plus,
+  FolderGit2,
+  Trash2,
+  Clock,
+  Check,
+  FolderPlus,
+  GitBranch,
+  RefreshCw,
+  Folder,
+} from 'lucide-react';
+import { SessionInfo, ProjectInfo } from '../types/protocol';
 
 interface SessionDrawerProps {
   isOpen: boolean;
   onClose: () => void;
+  projects: ProjectInfo[];
+  currentProject: ProjectInfo | null;
+  onSelectProject: (project: ProjectInfo) => void;
+  onAddProject: (project: ProjectInfo) => void;
+  onRemoveProject: (projectId: string) => void;
+  availableProjects: ProjectInfo[];
+  projectsBaseDir: string;
+  onRequestScanProjects: () => void;
   sessions: SessionInfo[];
   currentSessionId: string;
-  onSelectSession: (id: string) => void;
-  onNewSession: (cwd: string) => void;
-  onDeleteSession: (id: string) => void;
-  currentCwd: string;
-  defaultCwd: string;
+  onSelectSession: (sessionId: string) => void;
+  onNewSession: () => void;
+  onDeleteSession: (sessionId: string) => void;
+  isAgentConnected: boolean;
 }
 
 export const SessionDrawer: React.FC<SessionDrawerProps> = ({
   isOpen,
   onClose,
+  projects,
+  currentProject,
+  onSelectProject,
+  onAddProject,
+  onRemoveProject,
+  availableProjects,
+  projectsBaseDir,
+  onRequestScanProjects,
   sessions,
   currentSessionId,
   onSelectSession,
   onNewSession,
   onDeleteSession,
-  currentCwd,
-  defaultCwd,
+  isAgentConnected,
 }) => {
-  const [customCwd, setCustomCwd] = useState(currentCwd || defaultCwd || '');
-  const [isEditingCwd, setIsEditingCwd] = useState(false);
+  const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  const [customPath, setCustomPath] = useState('');
+  const [customName, setCustomName] = useState('');
 
   if (!isOpen) return null;
 
-  const handleStartNewSession = () => {
-    onNewSession(customCwd);
-    onClose();
+  // カレントプロジェクトに紐づくセッションを抽出
+  const filteredSessions = sessions.filter((s) => {
+    if (!currentProject) return true;
+    return s.projectId === currentProject.id || s.cwd === currentProject.path;
+  });
+
+  const handleSelectFromCandidate = (candidate: ProjectInfo) => {
+    onAddProject(candidate);
+    onSelectProject(candidate);
+    setIsAddModalOpen(false);
+  };
+
+  const handleAddCustom = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!customPath.trim()) return;
+    const name = customName.trim() || customPath.trim().split('/').filter(Boolean).pop() || 'Project';
+    const newProj: ProjectInfo = {
+      id: name,
+      name,
+      path: customPath.trim(),
+    };
+    onAddProject(newProj);
+    onSelectProject(newProj);
+    setCustomPath('');
+    setCustomName('');
+    setIsAddModalOpen(false);
   };
 
   return (
@@ -43,13 +92,13 @@ export const SessionDrawer: React.FC<SessionDrawerProps> = ({
         onClick={onClose}
       />
 
-      {/* ドロワーコンテンツ */}
+      {/* ドロワー本体 */}
       <div className="relative w-4/5 max-w-sm bg-slate-900 border-r border-slate-800 h-full flex flex-col z-10 shadow-2xl safe-top safe-bottom select-none">
         {/* ヘッダー */}
-        <div className="p-4 border-b border-slate-800 flex items-center justify-between">
+        <div className="p-3.5 border-b border-slate-800 flex items-center justify-between">
           <div className="flex items-center space-x-2">
-            <MessageSquare className="w-5 h-5 text-indigo-400" />
-            <h2 className="font-bold text-sm text-slate-100">セッション & プロジェクト</h2>
+            <FolderGit2 className="w-5 h-5 text-sky-400" />
+            <h2 className="font-bold text-sm text-slate-100">プロジェクト & セッション</h2>
           </div>
           <button
             onClick={onClose}
@@ -59,59 +108,96 @@ export const SessionDrawer: React.FC<SessionDrawerProps> = ({
           </button>
         </div>
 
-        {/* CWD (作業ディレクトリ) 設定 */}
-        <div className="p-3 bg-slate-950/60 border-b border-slate-800/80">
-          <div className="flex items-center justify-between text-xs text-slate-400 mb-1.5">
-            <span className="flex items-center space-x-1">
-              <FolderGit2 className="w-3.5 h-3.5 text-sky-400" />
-              <span>作業ディレクトリ (CWD)</span>
+        {/* 1. プロジェクト選択セクション */}
+        <div className="p-3 bg-slate-950/70 border-b border-slate-800 space-y-2">
+          <div className="flex items-center justify-between text-xs text-slate-400">
+            <span className="font-semibold uppercase text-[10px] tracking-wider text-slate-400">
+              プロジェクト一覧 ({projects.length})
             </span>
             <button
-              onClick={() => setIsEditingCwd(!isEditingCwd)}
-              className="text-[11px] text-sky-400 hover:underline"
+              onClick={() => {
+                onRequestScanProjects();
+                setIsAddModalOpen(true);
+              }}
+              className="flex items-center space-x-1 text-[11px] text-sky-400 hover:text-sky-300 transition-colors"
             >
-              {isEditingCwd ? '完了' : '変更'}
+              <FolderPlus className="w-3.5 h-3.5" />
+              <span>PCから追加</span>
             </button>
           </div>
 
-          {isEditingCwd ? (
-            <input
-              type="text"
-              value={customCwd}
-              onChange={(e) => setCustomCwd(e.target.value)}
-              placeholder="/Users/username/work/project"
-              className="w-full bg-slate-900 border border-slate-700 rounded px-2.5 py-1.5 text-xs text-slate-200 outline-none focus:border-sky-500 font-mono"
-            />
-          ) : (
-            <div className="text-xs font-mono text-slate-300 truncate bg-slate-900/80 p-2 rounded border border-slate-800/80">
-              {customCwd || defaultCwd || 'Default Working Directory'}
+          {/* 登録済みプロジェクトリスト */}
+          <div className="flex space-x-2 overflow-x-auto py-1 no-scrollbar">
+            {projects.map((proj) => {
+              const isSelected = currentProject?.path === proj.path;
+              return (
+                <div
+                  key={proj.path}
+                  onClick={() => onSelectProject(proj)}
+                  className={`group relative shrink-0 flex items-center space-x-1.5 px-3 py-1.5 rounded-xl border text-xs cursor-pointer transition-all ${
+                    isSelected
+                      ? 'bg-sky-950/70 border-sky-500/80 text-sky-200 shadow-sm'
+                      : 'bg-slate-900 border-slate-800 text-slate-300 hover:bg-slate-850'
+                  }`}
+                >
+                  {proj.isGit ? (
+                    <GitBranch className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                  ) : (
+                    <Folder className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                  )}
+                  <span className="font-medium truncate max-w-[130px]">{proj.name}</span>
+
+                  {projects.length > 1 && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onRemoveProject(proj.id);
+                      }}
+                      className="opacity-0 group-hover:opacity-100 p-0.5 hover:text-rose-400 transition-opacity ml-1"
+                      title="プロジェクト登録解除"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          {/* 選択中プロジェクトのフルパス表示 */}
+          {currentProject && (
+            <div className="text-[10px] font-mono text-slate-400 truncate px-1">
+              📁 {currentProject.path}
             </div>
           )}
         </div>
 
-        {/* 新規セッションボタン */}
+        {/* 2. 新規セッション開始ボタン */}
         <div className="p-3 border-b border-slate-800">
           <button
-            onClick={handleStartNewSession}
-            className="w-full flex items-center justify-center space-x-2 py-2.5 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium shadow-md shadow-indigo-950/50 active:scale-[0.98] transition-all"
+            onClick={() => {
+              onNewSession();
+              onClose();
+            }}
+            className="w-full flex items-center justify-center space-x-2 py-2 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium shadow-md shadow-indigo-950/50 active:scale-[0.98] transition-all"
           >
             <Plus className="w-4 h-4" />
-            <span>新規セッションを開始</span>
+            <span>このプロジェクトで新規セッション</span>
           </button>
         </div>
 
-        {/* セッション履歴リスト */}
+        {/* 3. セッション履歴一覧 */}
         <div className="flex-1 overflow-y-auto p-3 space-y-2">
-          <div className="text-[11px] font-semibold text-slate-500 uppercase px-1">
-            履歴 ({sessions.length})
+          <div className="flex items-center justify-between text-[11px] font-semibold text-slate-400 uppercase px-1">
+            <span>セッション履歴 ({filteredSessions.length})</span>
           </div>
 
-          {sessions.length === 0 ? (
+          {filteredSessions.length === 0 ? (
             <div className="text-center py-8 text-xs text-slate-500">
-              保存されたセッションはありません
+              このプロジェクトのセッションはありません
             </div>
           ) : (
-            sessions.map((session) => {
+            filteredSessions.map((session) => {
               const isActive = session.id === currentSessionId;
               const dateStr = new Date(session.updatedAt).toLocaleDateString([], {
                 month: 'short',
@@ -123,15 +209,15 @@ export const SessionDrawer: React.FC<SessionDrawerProps> = ({
               return (
                 <div
                   key={session.id}
-                  className={`group flex items-center justify-between p-2.5 rounded-xl border transition-all cursor-pointer ${
-                    isActive
-                      ? 'bg-indigo-950/40 border-indigo-500/50 text-indigo-200 shadow-sm'
-                      : 'bg-slate-850/50 border-slate-800 hover:bg-slate-800/70 text-slate-300'
-                  }`}
                   onClick={() => {
                     onSelectSession(session.id);
                     onClose();
                   }}
+                  className={`group flex items-center justify-between p-2.5 rounded-xl border transition-all cursor-pointer ${
+                    isActive
+                      ? 'bg-indigo-950/50 border-indigo-500/60 text-indigo-100 shadow-sm'
+                      : 'bg-slate-850/50 border-slate-800/80 hover:bg-slate-800 text-slate-300'
+                  }`}
                 >
                   <div className="min-w-0 flex-1 mr-2">
                     <div className="flex items-center space-x-1.5">
@@ -141,9 +227,9 @@ export const SessionDrawer: React.FC<SessionDrawerProps> = ({
                       </span>
                     </div>
 
-                    <div className="flex items-center space-x-2 text-[10px] text-slate-500 mt-1">
+                    <div className="flex items-center space-x-2 text-[10px] text-slate-400 mt-1">
                       <span className="flex items-center space-x-0.5">
-                        <Clock className="w-3 h-3" />
+                        <Clock className="w-3 h-3 text-slate-400" />
                         <span>{dateStr}</span>
                       </span>
                       <span>•</span>
@@ -156,7 +242,7 @@ export const SessionDrawer: React.FC<SessionDrawerProps> = ({
                       e.stopPropagation();
                       onDeleteSession(session.id);
                     }}
-                    className="p-1.5 rounded-lg text-slate-500 hover:text-rose-400 hover:bg-slate-800 opacity-80 hover:opacity-100 transition-colors"
+                    className="p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-slate-800 transition-colors"
                     title="セッション削除"
                   >
                     <Trash2 className="w-3.5 h-3.5" />
@@ -167,6 +253,111 @@ export const SessionDrawer: React.FC<SessionDrawerProps> = ({
           )}
         </div>
       </div>
+
+      {/* プロジェクト追加モーダル (社内PCフォルダ候補) */}
+      {isAddModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div
+            className="fixed inset-0 bg-black/70 backdrop-blur-sm"
+            onClick={() => setIsAddModalOpen(false)}
+          />
+
+          <div className="relative w-full max-w-sm bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl p-4 z-10 select-none text-slate-200 flex flex-col max-h-[85vh]">
+            <div className="flex items-center justify-between pb-2.5 border-b border-slate-800 mb-3">
+              <div className="flex items-center space-x-1.5">
+                <FolderPlus className="w-4 h-4 text-sky-400" />
+                <h3 className="font-bold text-sm text-slate-100">社内PCのフォルダを追加</h3>
+              </div>
+              <button
+                onClick={() => setIsAddModalOpen(false)}
+                className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* PC候補一覧 */}
+            <div className="flex-1 overflow-y-auto space-y-2 mb-3 pr-1">
+              <div className="flex items-center justify-between text-[11px] text-slate-400">
+                <span>PC候補 ({projectsBaseDir || '~/work'})</span>
+                <button
+                  onClick={onRequestScanProjects}
+                  className="flex items-center space-x-0.5 text-sky-400 hover:underline"
+                >
+                  <RefreshCw className="w-3 h-3" />
+                  <span>再取得</span>
+                </button>
+              </div>
+
+              {!isAgentConnected ? (
+                <div className="text-center py-4 text-xs text-amber-400/80">
+                  PCがオフラインのため候補を取得できません
+                </div>
+              ) : availableProjects.length === 0 ? (
+                <div className="text-center py-4 text-xs text-slate-500">
+                  候補フォルダの読み込み中...
+                </div>
+              ) : (
+                availableProjects.map((p) => {
+                  const isAlreadyAdded = projects.some((ep) => ep.path === p.path);
+                  return (
+                    <div
+                      key={p.path}
+                      onClick={() => handleSelectFromCandidate(p)}
+                      className={`flex items-center justify-between p-2 rounded-xl border transition-all cursor-pointer ${
+                        isAlreadyAdded
+                          ? 'bg-slate-900/50 border-slate-800/60 opacity-60'
+                          : 'bg-slate-950 border-slate-800 hover:border-sky-500/60 hover:bg-slate-900'
+                      }`}
+                    >
+                      <div className="min-w-0 flex-1 mr-2">
+                        <div className="flex items-center space-x-1.5">
+                          {p.isGit ? (
+                            <GitBranch className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                          ) : (
+                            <Folder className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+                          )}
+                          <span className="text-xs font-medium text-slate-200 truncate">
+                            {p.name}
+                          </span>
+                        </div>
+                        <div className="text-[10px] font-mono text-slate-400 truncate mt-0.5">
+                          {p.path}
+                        </div>
+                      </div>
+
+                      <span className="text-[10px] px-2 py-1 rounded bg-sky-950/80 text-sky-400 border border-sky-800/60 shrink-0">
+                        {isAlreadyAdded ? '選択' : '追加'}
+                      </span>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            {/* カスタム手動入力フォーム */}
+            <form onSubmit={handleAddCustom} className="pt-2.5 border-t border-slate-800 space-y-2">
+              <div className="text-[10px] font-semibold text-slate-400 uppercase">
+                またはパスを直接入力:
+              </div>
+              <input
+                type="text"
+                value={customPath}
+                onChange={(e) => setCustomPath(e.target.value)}
+                placeholder="/Users/s-ikari/work/my-project"
+                required
+                className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-slate-100 font-mono outline-none focus:border-sky-500"
+              />
+              <button
+                type="submit"
+                className="w-full py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-medium transition-colors"
+              >
+                手動パスで追加
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

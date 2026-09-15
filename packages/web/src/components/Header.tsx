@@ -1,5 +1,5 @@
 import React from 'react';
-import { Settings, History, Terminal, Laptop, Wifi, WifiOff } from 'lucide-react';
+import { Settings, History, Terminal, Wifi, WifiOff } from 'lucide-react';
 
 interface HeaderProps {
   isHubConnected: boolean;
@@ -54,13 +54,24 @@ export const Header: React.FC<HeaderProps> = ({
         </div>
       </div>
 
-      {/* 中央: PCホスト名 & フォルダ */}
-      <div className="hidden sm:flex items-center space-x-1 text-xs text-slate-400 bg-slate-950/60 px-2.5 py-1 rounded-full border border-slate-800/80">
-        <Laptop className="w-3.5 h-3.5 text-slate-400" />
-        <span className="text-slate-300 font-medium">{agentHostname || 'Office PC'}</span>
-        <span className="text-slate-600">•</span>
-        <Terminal className="w-3.5 h-3.5 text-sky-400" />
-        <span className="text-slate-300 truncate max-w-[120px]">{shortCwd}</span>
+      {/* 中央: プロジェクト名 & PCホスト名 */}
+      <div
+        onClick={onOpenDrawer}
+        className="flex items-center space-x-1 text-xs text-slate-300 bg-slate-950/80 px-2.5 py-1 rounded-full border border-slate-800 hover:border-slate-700 active:scale-95 cursor-pointer transition-all"
+        title="プロジェクト切り替え"
+      >
+        <Terminal className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+        <span className="font-semibold text-sky-200 truncate max-w-[120px] xs:max-w-[150px]">
+          {shortCwd}
+        </span>
+        {agentHostname && (
+          <>
+            <span className="text-slate-600 hidden xs:inline">•</span>
+            <span className="text-[10px] text-slate-400 hidden xs:inline truncate max-w-[70px]">
+              {agentHostname}
+            </span>
+          </>
+        )}
       </div>
 
       {/* 右: ステータスバッジ & 設定ボタン */}

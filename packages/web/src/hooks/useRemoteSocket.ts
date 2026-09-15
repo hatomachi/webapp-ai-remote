@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { InboundMessage, OutboundMessage, SendPromptMessage, PermissionMode } from '../types/protocol';
+import { InboundMessage, OutboundMessage, SendPromptMessage, PermissionMode, ProjectInfo } from '../types/protocol';
 
 interface SocketSettings {
   hubUrl: string;
@@ -52,6 +52,8 @@ export function useRemoteSocket(onMessage: (msg: InboundMessage) => void) {
   const [agentHostname, setAgentHostname] = useState<string>('');
   const [agentCwd, setAgentCwd] = useState<string>('');
   const [isExecuting, setIsExecuting] = useState<boolean>(false);
+  const [availableProjects, setAvailableProjects] = useState<ProjectInfo[]>([]);
+  const [projectsBaseDir, setProjectsBaseDir] = useState<string>('');
 
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<any>(null);
@@ -102,11 +104,18 @@ export function useRemoteSocket(onMessage: (msg: InboundMessage) => void) {
             setIsAgentConnected(true);
             setAgentHostname(msg.hostname);
             setAgentCwd(msg.defaultCwd);
+            // Agent 接続時にプロジェクト候補を自動取得
+            ws.send(JSON.stringify({ type: 'list_projects' }));
           } else if (msg.type === 'agent_status') {
             setIsAgentConnected(true);
             setAgentHostname(msg.hostname);
             setAgentCwd(msg.cwd);
             setIsExecuting(msg.isBusy);
+            // プロジェクト候補の取得
+            ws.send(JSON.stringify({ type: 'list_projects' }));
+          } else if (msg.type === 'projects_list') {
+            setAvailableProjects(msg.projects);
+            setProjectsBaseDir(msg.baseDir);
           } else if (msg.type === 'turn_start') {
             setIsExecuting(true);
           } else if (msg.type === 'turn_end' || msg.type === 'turn_error' || msg.type === 'execution_aborted') {
@@ -160,6 +169,7 @@ export function useRemoteSocket(onMessage: (msg: InboundMessage) => void) {
   const sendPrompt = useCallback((
     text: string,
     sessionId?: string,
+    isResume?: boolean,
     cwd?: string,
     permissionMode: PermissionMode = 'acceptEdits'
   ) => {
@@ -167,6 +177,7 @@ export function useRemoteSocket(onMessage: (msg: InboundMessage) => void) {
       type: 'prompt',
       text,
       sessionId,
+      isResume,
       cwd: cwd || settings.defaultCwd || agentCwd || undefined,
       permissionMode,
     };
@@ -186,6 +197,10 @@ export function useRemoteSocket(onMessage: (msg: InboundMessage) => void) {
     setSettings(newSettings);
   }, []);
 
+  const requestProjects = useCallback((rootPath?: string) => {
+    return send({ type: 'list_projects', rootPath });
+  }, [send]);
+
   return {
     settings,
     updateSettings,
@@ -194,6 +209,9 @@ export function useRemoteSocket(onMessage: (msg: InboundMessage) => void) {
     agentHostname,
     agentCwd,
     isExecuting,
+    availableProjects,
+    projectsBaseDir,
+    requestProjects,
     sendPrompt,
     abort,
     reconnect: connect,

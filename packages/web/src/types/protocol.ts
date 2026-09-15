@@ -68,11 +68,19 @@ export interface ExecutionAbortedMessage {
   timestamp: string;
 }
 
+export interface ProjectsListMessage {
+  type: 'projects_list';
+  baseDir: string;
+  projects: ProjectInfo[];
+  timestamp: string;
+}
+
 export type InboundMessage =
   | HubStatusMessage
   | HubErrorMessage
   | AgentHelloMessage
   | AgentStatusResponseMessage
+  | ProjectsListMessage
   | TurnStartMessage
   | ClaudeEventMessage
   | ClaudeRawLogMessage
@@ -86,6 +94,7 @@ export interface SendPromptMessage {
   type: 'prompt';
   text: string;
   sessionId?: string;
+  isResume?: boolean;
   cwd?: string;
   permissionMode?: PermissionMode;
 }
@@ -98,9 +107,21 @@ export interface GetStatusMessage {
   type: 'get_status';
 }
 
-export type OutboundMessage = SendPromptMessage | AbortMessage | GetStatusMessage;
+export interface ListProjectsMessage {
+  type: 'list_projects';
+  rootPath?: string;
+}
+
+export type OutboundMessage = SendPromptMessage | AbortMessage | GetStatusMessage | ListProjectsMessage;
 
 // --- App State Types ---
+
+export interface ProjectInfo {
+  id: string;
+  name: string;
+  path: string;
+  isGit?: boolean;
+}
 
 export interface ToolUseItem {
   id: string;
@@ -134,6 +155,7 @@ export interface SessionInfo {
   id: string;
   title: string;
   cwd: string;
+  projectId?: string;
   createdAt: string;
   updatedAt: string;
   messageCount: number;

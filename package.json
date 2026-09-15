@@ -9,7 +9,9 @@
   "scripts": {
     "agent:dev": "npm --workspace=packages/agent run dev",
     "hub:dev": "npm --workspace=packages/hub run dev",
-    "web:dev": "npm --workspace=packages/web run dev"
+    "web:dev": "npm --workspace=packages/web run dev",
+    "web:build": "npm --workspace=packages/web run build",
+    "web:deploy": "npm run web:build && cp -r packages/web/dist/* docker/nginx/html/"
   },
   "keywords": [
     "claude-code",

@@ -1,0 +1,19 @@
+{
+  "name": "@ai-remote/agent",
+  "version": "0.1.0",
+  "description": "Bridge Agent running on Office PC to interact with Claude Code",
+  "main": "src/index.ts",
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "build": "tsc"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/ws": "^8.5.10",
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.0"
+  }
+}

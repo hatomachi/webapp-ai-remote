@@ -1,0 +1,14 @@
+{
+  "name": "@ai-remote/hub",
+  "version": "0.1.0",
+  "description": "WebSocket Relay Hub running on EC2 behind Nginx",
+  "main": "src/index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

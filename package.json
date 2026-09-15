@@ -1,0 +1,22 @@
+{
+  "name": "webapp-ai-remote",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Mobile PWA & Bridge for Claude Code on Office PC via Internal AWS EC2",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "agent:dev": "npm --workspace=packages/agent run dev",
+    "hub:dev": "npm --workspace=packages/hub run dev",
+    "web:dev": "npm --workspace=packages/web run dev"
+  },
+  "keywords": [
+    "claude-code",
+    "pwa",
+    "remote-control",
+    "mobile"
+  ],
+  "author": "hatomachi",
+  "license": "MIT"
+}

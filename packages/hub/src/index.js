@@ -10,7 +10,7 @@ const PING_INTERVAL_MS = 30000;
 const server = http.createServer((req, res) => {
   const reqUrl = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
   
-  if (reqUrl.pathname === '/health') {
+  if (reqUrl.pathname === '/health' || reqUrl.pathname.endsWith('/health')) {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
       status: 'ok',
@@ -77,11 +77,11 @@ server.on('upgrade', (req, socket, head) => {
     return;
   }
 
-  if (pathname === '/ws/agent') {
+  if (pathname === '/ws/agent' || pathname.endsWith('/ws/agent')) {
     wssAgent.handleUpgrade(req, socket, head, (ws) => {
       wssAgent.emit('connection', ws, req);
     });
-  } else if (pathname === '/ws/client') {
+  } else if (pathname === '/ws/client' || pathname.endsWith('/ws/client')) {
     wssClient.handleUpgrade(req, socket, head, (ws) => {
       wssClient.emit('connection', ws, req);
     });

@@ -1,15 +1,58 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import { spawn, ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { createInterface } from 'node:readline';
 import { WebSocket } from 'ws';
 
+// .env ファイルの自動読み込み (Node 20+ 標準機能 or 簡易パーサー)
+function loadEnv() {
+  const envPaths = [
+    path.resolve(process.cwd(), '.env'),
+    path.resolve(process.cwd(), '../..', '.env')
+  ];
+  for (const envPath of envPaths) {
+    if (fs.existsSync(envPath)) {
+      try {
+        if (typeof (process as any).loadEnvFile === 'function') {
+          (process as any).loadEnvFile(envPath);
+        } else {
+          const lines = fs.readFileSync(envPath, 'utf-8').split('\n');
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed || trimmed.startsWith('#')) continue;
+            const eqIdx = trimmed.indexOf('=');
+            if (eqIdx > 0) {
+              const key = trimmed.substring(0, eqIdx).trim();
+              const val = trimmed.substring(eqIdx + 1).trim().replace(/^['"]|['"]$/g, '');
+              if (!process.env[key]) {
+                process.env[key] = val;
+              }
+            }
+          }
+        }
+        break;
+      } catch (e) {
+        // ignore
+      }
+    }
+  }
+}
+loadEnv();
+
+const isWindows = process.platform === 'win32';
+const defaultClaudeBin = isWindows
+  ? 'claude.cmd'
+  : (fs.existsSync('/Users/s-ikari/.local/bin/claude') ? '/Users/s-ikari/.local/bin/claude' : 'claude');
+
 const HUB_URL = process.env.HUB_URL || 'ws://localhost:8090/ws/agent';
 const AUTH_TOKEN = process.env.AUTH_TOKEN || 'dev-secret-token';
-const CLAUDE_BIN = process.env.CLAUDE_BIN || '/Users/s-ikari/.local/bin/claude';
+const CLAUDE_BIN = process.env.CLAUDE_BIN || defaultClaudeBin;
 const currentDir = process.cwd();
-const DEFAULT_CWD = process.env.DEFAULT_CWD || (currentDir.endsWith('/packages/agent') ? path.resolve(currentDir, '../..') : currentDir);
+const isAgentDir = path.basename(currentDir) === 'agent' || currentDir.endsWith(path.join('packages', 'agent'));
+const DEFAULT_CWD = process.env.DEFAULT_CWD || (isAgentDir ? path.resolve(currentDir, '../..') : currentDir);
+const HOSTNAME = process.env.HOSTNAME || process.env.COMPUTERNAME || os.hostname() || 'OfficePC';
 
 let ws: WebSocket | null = null;
 let reconnectTimer: NodeJS.Timeout | null = null;
@@ -17,6 +60,7 @@ let currentChildProcess: ChildProcess | null = null;
 const knownSessions = new Set<string>();
 
 console.log('=== AI Remote Bridge Agent ===');
+console.log(`OS: ${process.platform} (${HOSTNAME})`);
 console.log(`Target Hub: ${HUB_URL}`);
 console.log(`Claude Binary: ${CLAUDE_BIN}`);
 console.log(`Default CWD: ${DEFAULT_CWD}`);
@@ -40,7 +84,7 @@ function connectToHub() {
     // Agent 初期情報を Hub (および接続中 Client) へ送信
     sendToHub({
       type: 'agent_hello',
-      hostname: process.env.HOSTNAME || 'MacBook',
+      hostname: HOSTNAME,
       defaultCwd: DEFAULT_CWD,
       timestamp: new Date().toISOString()
     });
@@ -135,7 +179,7 @@ function handleClientMessage(msg: any) {
   } else if (msg.type === 'get_status') {
     sendToHub({
       type: 'agent_status',
-      hostname: process.env.HOSTNAME || 'MacBook',
+      hostname: HOSTNAME,
       cwd: DEFAULT_CWD,
       isBusy: currentChildProcess !== null,
       timestamp: new Date().toISOString()
@@ -232,7 +276,8 @@ function executeClaudeTurn(params: {
         ...process.env,
         FORCE_COLOR: '0'
       },
-      stdio: ['ignore', 'pipe', 'pipe']
+      stdio: ['ignore', 'pipe', 'pipe'],
+      shell: isWindows
     });
 
     currentChildProcess = child;

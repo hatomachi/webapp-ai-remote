@@ -14,9 +14,20 @@ export function getDefaultSettings(): SocketSettings {
   const proto = isHttps ? 'wss:' : 'ws:';
   const host = typeof window !== 'undefined' ? window.location.host : 'localhost:8090';
   
-  // Nginxのポート8090からサーブされる場合はそのまま /ws/client
+  // 現在のURLからサブパス（例: /ai/ など）を自動検出
+  let subpath = '';
+  if (typeof window !== 'undefined') {
+    const pathname = window.location.pathname;
+    const lastSlashIdx = pathname.lastIndexOf('/');
+    if (lastSlashIdx > 0) {
+      subpath = pathname.substring(0, lastSlashIdx);
+      if (subpath === '/') subpath = '';
+    }
+  }
+
+  // Nginx等からサーブされる場合は自動判定されたサブパス + /ws/client
   // Vite開発サーバー (5173等) の場合は直接 Nginx 8090 に向ける
-  let defaultHubUrl = `${proto}//${host}/ws/client`;
+  let defaultHubUrl = `${proto}//${host}${subpath}/ws/client`;
   if (typeof window !== 'undefined' && window.location.port === '5173') {
     defaultHubUrl = `${proto}//${window.location.hostname}:8090/ws/client`;
   }

@@ -7,7 +7,9 @@
     "packages/*"
   ],
   "scripts": {
+    "agent": "npm --workspace=packages/agent run dev",
     "agent:dev": "npm --workspace=packages/agent run dev",
+    "hub": "node packages/hub/src/index.js",
     "hub:dev": "npm --workspace=packages/hub run dev",
     "web:dev": "npm --workspace=packages/web run dev",
     "web:build": "npm --workspace=packages/web run build",

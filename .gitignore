@@ -5,6 +5,5 @@ dist
 .DS_Store
 *.log
 .docker-config
-docker/nginx/html/*
-!docker/nginx/html/.gitkeep
+
 

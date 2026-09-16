@@ -1,1 +1,0 @@
-{"name":"AI Remote Cockpit","short_name":"AIRemote","start_url":"./","display":"standalone","background_color":"#0f172a","lang":"en","scope":"./","description":"Mobile Remote Cockpit for Claude Code on Office PC","theme_color":"#0f172a","orientation":"portrait","icons":[{"src":"icon.svg","sizes":"192x192 512x512","type":"image/svg+xml","purpose":"any maskable"}]}

@@ -93,17 +93,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           <div>
             <label className="block text-slate-400 font-medium mb-1 flex items-center space-x-1">
               <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
-              <span>認証トークン (AUTH_TOKEN)</span>
+              <span>セッショントークン (Session Token)</span>
             </label>
             <input
-              type="password"
+              type="text"
               value={authToken}
               onChange={(e) => setAuthToken(e.target.value)}
-              placeholder="dev-secret-token"
+              placeholder="会社PC起動時に表示されたUUID"
               className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-100 font-mono outline-none focus:border-emerald-500 transition-colors"
             />
             <p className="text-[10px] text-slate-500 mt-1">
-              EC2 Relay Hub の環境変数 AUTH_TOKEN と一致させてください
+              会社PCの起動ログに表示されたUUIDを入力するか、表示されたURLをスマホで開くと自動入力されます
             </p>
           </div>
 

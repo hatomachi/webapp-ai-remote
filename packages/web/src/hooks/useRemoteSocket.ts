@@ -34,22 +34,41 @@ export function getDefaultSettings(): SocketSettings {
 
   return {
     hubUrl: defaultHubUrl,
-    authToken: 'dev-secret-token',
+    authToken: '',
     defaultCwd: '',
   };
 }
 
 export function loadSettings(): SocketSettings {
+  let initial = getDefaultSettings();
   try {
     const saved = localStorage.getItem(SETTINGS_KEY);
     if (saved) {
-      const parsed = JSON.parse(saved);
-      return { ...getDefaultSettings(), ...parsed };
+      initial = { ...initial, ...JSON.parse(saved) };
     }
   } catch (e) {
     console.error('Failed to parse settings from localStorage', e);
   }
-  return getDefaultSettings();
+
+  // URL クエリパラメータ (?token=xxxx) が付与されている場合は最優先で自動ロード＆保存
+  if (typeof window !== 'undefined') {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const urlToken = params.get('token');
+      if (urlToken && urlToken.trim()) {
+        initial.authToken = urlToken.trim();
+        saveSettingsToStorage(initial);
+
+        // URL をクリーンアップ (?token= を取り除く)
+        const cleanUrl = window.location.pathname + window.location.hash;
+        window.history.replaceState({}, document.title, cleanUrl);
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  return initial;
 }
 
 export function saveSettingsToStorage(settings: SocketSettings) {

@@ -7,7 +7,6 @@ services:
     command: node packages/hub/src/index.js
     environment:
       - PORT=3001
-      - AUTH_TOKEN=dev-secret-token
     expose:
       - "3001"
     restart: unless-stopped

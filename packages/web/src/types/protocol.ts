@@ -160,3 +160,7 @@ export interface SessionInfo {
   updatedAt: string;
   messageCount: number;
 }
+
+export type TransportMode = 'auto' | 'ws' | 'http';
+export type ActiveTransport = 'ws' | 'http' | 'none';
+

@@ -1,9 +1,11 @@
 import React from 'react';
 import { Settings, History, Terminal, Wifi, WifiOff } from 'lucide-react';
+import { ActiveTransport } from '../types/protocol';
 
 interface HeaderProps {
   isHubConnected: boolean;
   isAgentConnected: boolean;
+  activeTransport?: ActiveTransport;
   agentHostname: string;
   currentCwd: string;
   sessionTitle: string;
@@ -15,6 +17,7 @@ interface HeaderProps {
 export const Header: React.FC<HeaderProps> = ({
   isHubConnected,
   isAgentConnected,
+  activeTransport = 'none',
   agentHostname,
   currentCwd,
   sessionTitle,
@@ -80,11 +83,20 @@ export const Header: React.FC<HeaderProps> = ({
         <div className="flex items-center space-x-1 text-[11px] px-2 py-1 rounded-md bg-slate-800/70 border border-slate-700/50">
           {/* Hub */}
           <span
-            title={isHubConnected ? "Hub: 接続済み" : "Hub: 切断"}
-            className="flex items-center"
+            title={
+              isHubConnected
+                ? `Hub: 接続済み (${activeTransport.toUpperCase()})`
+                : "Hub: 切断"
+            }
+            className="flex items-center space-x-0.5"
           >
             {isHubConnected ? (
-              <Wifi className="w-3.5 h-3.5 text-emerald-400" />
+              <>
+                <Wifi className="w-3.5 h-3.5 text-emerald-400" />
+                <span className="text-[9px] font-mono font-bold text-sky-400 ml-0.5">
+                  {activeTransport === 'http' ? 'HTTP' : activeTransport === 'ws' ? 'WS' : ''}
+                </span>
+              </>
             ) : (
               <WifiOff className="w-3.5 h-3.5 text-rose-400 animate-pulse" />
             )}

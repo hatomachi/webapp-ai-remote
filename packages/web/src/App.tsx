@@ -368,12 +368,13 @@ export function App() {
     [currentSessionId]
   );
 
-  // --- WebSocket フック ---
+  // --- WebSocket / HTTP ハイブリッドフック ---
   const {
     settings,
     updateSettings,
     isHubConnected,
     isAgentConnected,
+    activeTransport,
     agentHostname,
     agentCwd,
     isExecuting,
@@ -531,6 +532,7 @@ export function App() {
       <Header
         isHubConnected={isHubConnected}
         isAgentConnected={isAgentConnected}
+        activeTransport={activeTransport}
         agentHostname={agentHostname}
         currentCwd={currentCwd}
         sessionTitle={activeSessionTitle}

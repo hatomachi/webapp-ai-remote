@@ -344,7 +344,7 @@ export const SessionDrawer: React.FC<SessionDrawerProps> = ({
                 type="text"
                 value={customPath}
                 onChange={(e) => setCustomPath(e.target.value)}
-                placeholder="/Users/s-ikari/work/my-project"
+                placeholder="/path/to/my-project or C:\work\my-project"
                 required
                 className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-slate-100 font-mono outline-none focus:border-sky-500"
               />

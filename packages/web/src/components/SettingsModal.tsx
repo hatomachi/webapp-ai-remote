@@ -1,20 +1,13 @@
 import React, { useState } from 'react';
-import { X, Save, RotateCcw, ShieldCheck, Server, Folder } from 'lucide-react';
-import { getDefaultSettings } from '../hooks/useRemoteSocket';
+import { X, Save, RotateCcw, ShieldCheck, Server, Folder, Radio } from 'lucide-react';
+import { getDefaultSettings, SocketSettings } from '../hooks/useRemoteSocket';
+import { TransportMode } from '../types/protocol';
 
 interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
-  currentSettings: {
-    hubUrl: string;
-    authToken: string;
-    defaultCwd: string;
-  };
-  onSave: (settings: {
-    hubUrl: string;
-    authToken: string;
-    defaultCwd: string;
-  }) => void;
+  currentSettings: SocketSettings;
+  onSave: (settings: SocketSettings) => void;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -26,6 +19,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [hubUrl, setHubUrl] = useState(currentSettings.hubUrl);
   const [authToken, setAuthToken] = useState(currentSettings.authToken);
   const [defaultCwd, setDefaultCwd] = useState(currentSettings.defaultCwd);
+  const [transportMode, setTransportMode] = useState<TransportMode>(
+    currentSettings.transportMode || 'auto'
+  );
 
   if (!isOpen) return null;
 
@@ -35,6 +31,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       hubUrl: hubUrl.trim(),
       authToken: authToken.trim(),
       defaultCwd: defaultCwd.trim(),
+      transportMode,
     });
     onClose();
   };
@@ -44,6 +41,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setHubUrl(def.hubUrl);
     setAuthToken(def.authToken);
     setDefaultCwd(def.defaultCwd);
+    setTransportMode(def.transportMode || 'auto');
   };
 
   return (
@@ -117,11 +115,43 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               type="text"
               value={defaultCwd}
               onChange={(e) => setDefaultCwd(e.target.value)}
-              placeholder="/Users/s-ikari/work/..."
+              placeholder="/path/to/work/... or C:\work\..."
               className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-100 font-mono outline-none focus:border-amber-500 transition-colors"
             />
             <p className="text-[10px] text-slate-500 mt-1">
               空欄の場合は社内PC常駐 Agent の起動時ディレクトリが使用されます
+            </p>
+          </div>
+
+          {/* 通信プロトコル */}
+          <div>
+            <label className="block text-slate-400 font-medium mb-1.5 flex items-center space-x-1">
+              <Radio className="w-3.5 h-3.5 text-sky-400" />
+              <span>通信プロトコル (Transport Mode)</span>
+            </label>
+            <div className="grid grid-cols-3 gap-2">
+              {[
+                { id: 'auto', label: '自動 (推奨)', desc: 'WS ➔ HTTPフォールバック' },
+                { id: 'http', label: 'HTTP (SSE)', desc: '社内プロキシ・ALB向け' },
+                { id: 'ws', label: 'WebSocket', desc: '高速・常時双方向接続' },
+              ].map((mode) => (
+                <button
+                  key={mode.id}
+                  type="button"
+                  onClick={() => setTransportMode(mode.id as TransportMode)}
+                  className={`p-2 rounded-lg border text-left transition-all ${
+                    transportMode === mode.id
+                      ? 'bg-sky-500/15 border-sky-500 text-sky-200'
+                      : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700'
+                  }`}
+                >
+                  <div className="font-semibold text-[11px] leading-tight">{mode.label}</div>
+                  <div className="text-[9px] text-slate-500 mt-0.5 leading-tight">{mode.desc}</div>
+                </button>
+              ))}
+            </div>
+            <p className="text-[10px] text-slate-500 mt-1">
+              社内プロキシや ZTNA で WebSocket が遮断されるスマホ（Edge等）では「自動」または「HTTP」をお選びください
             </p>
           </div>
 

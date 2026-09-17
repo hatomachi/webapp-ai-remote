@@ -30,16 +30,9 @@
 
 ---
 
-## 📁 ディレクトリ構成（予定）
+## 📁 ディレクトリ構成
 
 - `packages/agent/`: 社内PC上で常駐するエージェント（EC2への接続、Claude Codeの実行制御）
-- `packages/hub/`: 社内EC2上で稼働する軽量WebSocket中継サーバ
+- `packages/hub/`: 社内EC2上で稼働する軽量WebSocket / HTTP中継サーバ
 - `packages/web/`: スマホEdgeブラウザ向けPWA（React + Tailwind CSS）
 
----
-
-## 📖 作戦・Next Actions
-
-詳細なロードマップ・現在地・課題は `personal-vault` の作戦ノートにて一元管理されています：
-- 作戦ノート: `personal-vault/10_職人・発明家/webapp-ai-remote.md`
-- 総合ダッシュボード: `personal-vault/00_Dashboard.md`

@@ -5,7 +5,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 const PORT = parseInt(process.env.PORT || '3001', 10);
 const PING_INTERVAL_MS = 30000;
 
-// 動的ルーム管理 (Map<token, { agentWs: WebSocket | null, clients: Set<WebSocket> }>)
+// 動的ルーム管理 (Map<token, { agentWs: WebSocket | null, clients: Set<WebSocket>, sseClients: Set<http.ServerResponse> }>)
 const rooms = new Map();
 
 /**
@@ -16,7 +16,8 @@ function getOrCreateRoom(token) {
   if (!room) {
     room = {
       agentWs: null,
-      clients: new Set()
+      clients: new Set(),
+      sseClients: new Set()
     };
     rooms.set(token, room);
   }
@@ -28,7 +29,7 @@ function getOrCreateRoom(token) {
  */
 function cleanupRoomIfEmpty(token) {
   const room = rooms.get(token);
-  if (room && room.agentWs === null && room.clients.size === 0) {
+  if (room && room.agentWs === null && room.clients.size === 0 && room.sseClients.size === 0) {
     rooms.delete(token);
   }
 }
@@ -43,7 +44,7 @@ function maskToken(token) {
 }
 
 /**
- * ルーム内の Client 全員に Agent 接続ステータスを通知
+ * ルーム内の Client 全員 (WebSocket & SSE) に Agent 接続ステータスを通知
  */
 function broadcastAgentStatus(room) {
   if (!room) return;
@@ -54,9 +55,20 @@ function broadcastAgentStatus(room) {
     timestamp: new Date().toISOString()
   });
 
+  // WebSocket クライアントへ送信
   for (const client of room.clients) {
     if (client.readyState === WebSocket.OPEN) {
       client.send(statusMsg);
+    }
+  }
+
+  // SSE クライアントへストリーミング送信
+  const sseData = `data: ${statusMsg}\n\n`;
+  for (const res of room.sseClients) {
+    try {
+      res.write(sseData);
+    } catch {
+      // ignore
     }
   }
 }
@@ -74,18 +86,31 @@ function extractToken(req) {
   return token || null;
 }
 
-// HTTP サーバーの作成（/health および WebSocket upgrade の受付）
+// HTTP サーバーの作成（/health, /api/events, /api/message および WebSocket upgrade の受付）
 const server = http.createServer((req, res) => {
   const reqUrl = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
-  
-  if (reqUrl.pathname === '/health' || reqUrl.pathname.endsWith('/health')) {
+  const pathname = reqUrl.pathname;
+
+  // CORS ヘッダーの付与
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204);
+    res.end();
+    return;
+  }
+
+  // ヘルスチェック
+  if (pathname === '/health' || pathname.endsWith('/health')) {
     let totalAgents = 0;
     let totalClients = 0;
     for (const room of rooms.values()) {
       if (room.agentWs && room.agentWs.readyState === WebSocket.OPEN) {
         totalAgents++;
       }
-      totalClients += room.clients.size;
+      totalClients += room.clients.size + room.sseClients.size;
     }
 
     res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -96,6 +121,107 @@ const server = http.createServer((req, res) => {
       totalClients,
       timestamp: new Date().toISOString()
     }));
+    return;
+  }
+
+  // トークン認証の検証
+  const token = extractToken(req);
+
+  // --- SSE ストリーミング受信エンドポイント (GET .../events) ---
+  if (req.method === 'GET' && (pathname === '/events' || pathname.endsWith('/events') || pathname.endsWith('/api/events'))) {
+    if (!token) {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Unauthorized: missing token' }));
+      return;
+    }
+
+    const room = getOrCreateRoom(token);
+    const masked = maskToken(token);
+    console.log(`[Hub] SSE Client connected to room [${masked}]`);
+
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache, no-transform',
+      'Connection': 'keep-alive',
+      'X-Accel-Buffering': 'no', // Nginxバッファリング無効化
+    });
+
+    // バッファキック: プロキシやALBのバッファリングを破るためのダミーパディング送信
+    res.write(': ' + ' '.repeat(2048) + '\n\n');
+
+    room.sseClients.add(res);
+
+    // 接続直後に現在の Agent 接続状態を即座に送信
+    const isConnected = room.agentWs !== null && room.agentWs.readyState === WebSocket.OPEN;
+    res.write(`data: ${JSON.stringify({
+      type: 'status',
+      agentConnected: isConnected,
+      timestamp: new Date().toISOString()
+    })}\n\n`);
+
+    // 15秒ごとのキープアライブ Ping
+    const sseKeepAlive = setInterval(() => {
+      try {
+        res.write(': ping\n\n');
+      } catch {
+        clearInterval(sseKeepAlive);
+      }
+    }, 15000);
+
+    req.on('close', () => {
+      clearInterval(sseKeepAlive);
+      room.sseClients.delete(res);
+      console.log(`[Hub] SSE Client disconnected from room [${masked}]`);
+      cleanupRoomIfEmpty(token);
+    });
+
+    return;
+  }
+
+  // --- メッセージ送信エンドポイント (POST .../message) ---
+  if (req.method === 'POST' && (pathname === '/message' || pathname.endsWith('/message') || pathname.endsWith('/api/message'))) {
+    if (!token) {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Unauthorized: missing token' }));
+      return;
+    }
+
+    const room = getOrCreateRoom(token);
+    const masked = maskToken(token);
+
+    let body = '';
+    req.on('data', chunk => {
+      body += chunk;
+      if (body.length > 10 * 1024 * 1024) {
+        res.writeHead(413, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Payload Too Large' }));
+        req.destroy();
+      }
+    });
+
+    req.on('end', () => {
+      if (!body) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Empty body' }));
+        return;
+      }
+
+      if (room.agentWs && room.agentWs.readyState === WebSocket.OPEN) {
+        // Agent へそのまま転送
+        room.agentWs.send(body);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true }));
+      } else {
+        console.warn(`[Hub] HTTP Client sent message but Agent is offline in room [${masked}]`);
+        res.writeHead(503, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          ok: false,
+          error: 'Agent is not currently connected to Hub in this room.',
+          code: 'AGENT_OFFLINE'
+        }));
+      }
+    });
+
     return;
   }
 
@@ -162,10 +288,23 @@ wssAgent.on('connection', (ws, req) => {
   broadcastAgentStatus(room);
 
   ws.on('message', (data, isBinary) => {
-    // 当該ルームの Client 全員にメッセージを転送
+    // 当該ルームの WebSocket Client 全員にメッセージを転送
     for (const client of room.clients) {
       if (client.readyState === WebSocket.OPEN) {
         client.send(data, { binary: isBinary });
+      }
+    }
+
+    // 当該ルームの SSE Client 全員にストリーミング転送
+    if (room.sseClients && room.sseClients.size > 0) {
+      const text = typeof data === 'string' ? data : data.toString('utf-8');
+      const ssePayload = `data: ${text}\n\n`;
+      for (const res of room.sseClients) {
+        try {
+          res.write(ssePayload);
+        } catch {
+          // ignore
+        }
       }
     }
   });

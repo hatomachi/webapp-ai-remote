@@ -42,9 +42,10 @@ function loadEnv() {
 loadEnv();
 
 const isWindows = process.platform === 'win32';
+const homeLocalClaude = path.join(os.homedir(), '.local', 'bin', 'claude');
 const defaultClaudeBin = isWindows
   ? 'claude.cmd'
-  : (fs.existsSync('/Users/s-ikari/.local/bin/claude') ? '/Users/s-ikari/.local/bin/claude' : 'claude');
+  : (fs.existsSync(homeLocalClaude) ? homeLocalClaude : 'claude');
 
 const HUB_URL = process.env.HUB_URL || 'ws://localhost:8090/ws/agent';
 // 明示的に AUTH_TOKEN が指定されている場合はそれを尊重、未指定なら衝突しない一意なランダムUUIDを自動生成

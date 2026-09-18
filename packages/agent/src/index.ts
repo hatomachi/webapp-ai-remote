@@ -386,7 +386,26 @@ function executeClaudeTurn(params: {
   const initialResume = params.isResume !== undefined
     ? params.isResume
     : Boolean(params.sessionId && knownSessions.has(params.sessionId));
-  const workDir = params.cwd || DEFAULT_CWD;
+  // 作業ディレクトリの検証とOSパス不一致の自動フォールバック
+  let workDir = params.cwd || DEFAULT_CWD;
+  const isWindowsPath = /^[a-zA-Z]:[\\/]/.test(workDir);
+  const isUnixPath = workDir.startsWith('/');
+
+  let pathInvalidReason = '';
+  if (!isWindows && isWindowsPath) {
+    pathInvalidReason = `非Windows環境 (${process.platform}) にWindows形式のパス (${workDir}) が指定されました`;
+  } else if (isWindows && isUnixPath) {
+    pathInvalidReason = `Windows環境にUnix形式のパス (${workDir}) が指定されました`;
+  } else if (!fs.existsSync(workDir)) {
+    pathInvalidReason = `指定された作業ディレクトリ '${workDir}' が存在しません`;
+  }
+
+  if (pathInvalidReason) {
+    console.warn(`[Agent] ⚠️ ${pathInvalidReason}。(前回の別環境/PCのパスの可能性があります)`);
+    console.warn(`[Agent] ➡️ 安全のため、エージェントのデフォルト作業ディレクトリ '${DEFAULT_CWD}' に自動フォールバックします。`);
+    workDir = DEFAULT_CWD;
+  }
+
   const permissionMode = params.permissionMode || 'acceptEdits';
 
   const runProcess = (resumeMode: boolean) => {

@@ -401,7 +401,7 @@ export function App() {
   useEffect(() => {
     if (!currentProject && (agentCwd || settings.defaultCwd)) {
       const activePath = agentCwd || settings.defaultCwd;
-      const name = activePath.split('/').filter(Boolean).pop() || 'Project';
+      const name = activePath.split(/[/\\]/).filter(Boolean).pop() || 'Project';
       const initialProj: ProjectInfo = { id: name, name, path: activePath };
       setCurrentProject(initialProj);
       setCurrentCwd(activePath);
@@ -415,6 +415,27 @@ export function App() {
       });
     }
   }, [agentCwd, settings.defaultCwd, currentProject]);
+
+  // Agent の OS 環境（Windows <-> Unix）とクライアント保持パスの不一致を自動検知してリセット
+  useEffect(() => {
+    if (!agentCwd) return;
+    const agentIsWindows = /^[a-zA-Z]:[\\/]/.test(agentCwd);
+    const clientPath = currentCwd || currentProject?.path || '';
+    if (!clientPath) return;
+    const clientIsWindows = /^[a-zA-Z]:[\\/]/.test(clientPath);
+
+    if (agentIsWindows !== clientIsWindows) {
+      console.log('[App] Detected OS mismatch between Agent and Client. Switching to Agent CWD:', agentCwd);
+      const name = agentCwd.split(/[/\\]/).filter(Boolean).pop() || 'Project';
+      const initialProj: ProjectInfo = { id: name, name, path: agentCwd };
+      setCurrentProject(initialProj);
+      setCurrentCwd(agentCwd);
+      if (availableProjects.length > 0) {
+        setProjects(availableProjects);
+        localStorage.setItem(PROJECTS_STORAGE_KEY, JSON.stringify(availableProjects));
+      }
+    }
+  }, [agentCwd, currentCwd, currentProject, availableProjects]);
 
   // --- プロジェクト操作 ---
   const handleSelectProject = (project: ProjectInfo) => {

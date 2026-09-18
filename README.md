@@ -36,3 +36,22 @@
 - `packages/hub/`: 社内EC2上で稼働する軽量WebSocket / HTTP中継サーバ
 - `packages/web/`: スマホEdgeブラウザ向けPWA（React + Tailwind CSS）
 
+---
+
+## 🚀 クイックスタート
+
+### 社内PC (Bridge Agent) の起動
+```bash
+# Windows 11 の場合
+start-agent.bat
+# または
+npm run agent
+
+# Linux / macOS の場合
+./start-agent.sh
+# または
+npm run agent
+```
+※ 初回起動時に `.env` が自動生成されます。必要に応じて `HUB_URL` を社内 EC2 の接続先（例: `ws://<EC2_IP>:3001/ws/agent` など）に合わせて編集してください。
+※ Claude Code CLI（`claude` または `claude.cmd`）がインストールされている必要があります。
+

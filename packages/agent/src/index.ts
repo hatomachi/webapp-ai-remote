@@ -5,6 +5,13 @@ import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { createInterface } from 'node:readline';
 import { WebSocket } from 'ws';
+import {
+  listSessions,
+  getSessionMessages,
+  saveSessionHistory,
+  deleteSession,
+  ChatMessage,
+} from './sessionManager.js';
 
 // .env ファイルの自動読み込み (Node 20+ 標準機能 or 簡易パーサー)
 function loadEnv() {
@@ -319,7 +326,7 @@ function scanProjects(customRoot?: string) {
 /**
  * Client からのメッセージ処理
  */
-function handleClientMessage(msg: any) {
+async function handleClientMessage(msg: any) {
   console.log('[Agent] Received from Client:', msg.type);
 
   if (msg.type === 'prompt') {
@@ -340,6 +347,30 @@ function handleClientMessage(msg: any) {
       type: 'projects_list',
       baseDir: result.baseDir,
       projects: result.projects,
+      timestamp: new Date().toISOString()
+    });
+  } else if (msg.type === 'list_sessions') {
+    const sessions = await listSessions(msg.projectId, msg.cwd);
+    sendToHub({
+      type: 'sessions_list',
+      sessions,
+      projectId: msg.projectId,
+      timestamp: new Date().toISOString()
+    });
+  } else if (msg.type === 'get_session_messages') {
+    const messages = await getSessionMessages(msg.sessionId, msg.cwd);
+    sendToHub({
+      type: 'session_messages',
+      sessionId: msg.sessionId,
+      messages,
+      timestamp: new Date().toISOString()
+    });
+  } else if (msg.type === 'delete_session') {
+    deleteSession(msg.sessionId);
+    const sessions = await listSessions(undefined, msg.cwd);
+    sendToHub({
+      type: 'sessions_list',
+      sessions,
       timestamp: new Date().toISOString()
     });
   } else {
@@ -364,7 +395,7 @@ function abortCurrentTurn() {
 /**
  * Claude Code の 1 ターンを実行
  */
-function executeClaudeTurn(params: {
+async function executeClaudeTurn(params: {
   text: string;
   sessionId?: string;
   isResume?: boolean;
@@ -408,6 +439,14 @@ function executeClaudeTurn(params: {
 
   const permissionMode = params.permissionMode || 'acceptEdits';
 
+  // 既存メッセージ履歴の読み込み
+  let existingMessages: ChatMessage[] = [];
+  try {
+    existingMessages = await getSessionMessages(activeSessionId, workDir);
+  } catch (err: any) {
+    console.warn('[Agent] Could not load prior session messages:', err.message);
+  }
+
   const runProcess = (resumeMode: boolean) => {
     const args: string[] = [
       '-p',
@@ -439,6 +478,24 @@ function executeClaudeTurn(params: {
     let hasOutput = false;
     let resumeNotFound = false;
 
+    // 今回のターンで記録するメッセージ
+    const turnUserMessage: ChatMessage = {
+      id: `user-${Date.now()}`,
+      role: 'user',
+      content: prompt,
+      timestamp: new Date().toISOString(),
+      sessionId: activeSessionId,
+    };
+
+    const assistantMsg: ChatMessage = {
+      id: `assistant-${Date.now()}`,
+      role: 'assistant',
+      content: '',
+      timestamp: new Date().toISOString(),
+      sessionId: activeSessionId,
+      toolUses: [],
+    };
+
     const child = spawn(CLAUDE_BIN, args, {
       cwd: workDir,
       env: {
@@ -452,7 +509,7 @@ function executeClaudeTurn(params: {
     currentChildProcess = child;
     let capturedSessionId = activeSessionId;
 
-    // stdout を 1 行ずつ JSON パースして Hub へ転送
+    // stdout を 1 行ずつ JSON パースして Hub へ転送 & メッセージ蓄積
     const readlineStdout = createInterface({ input: child.stdout });
     readlineStdout.on('line', (line) => {
       const trimmed = line.trim();
@@ -466,6 +523,78 @@ function executeClaudeTurn(params: {
           capturedSessionId = event.session_id;
         }
         knownSessions.add(capturedSessionId);
+
+        // 蓄積: テキスト delta
+        if (event.type === 'stream_event' && event.event?.type === 'content_block_delta') {
+          const deltaText = event.event.delta?.text || '';
+          if (deltaText) {
+            assistantMsg.content += deltaText;
+          }
+        }
+
+        // 蓄積: アシスタントブロック (text / tool_use)
+        if (event.type === 'assistant' && event.message?.content) {
+          const blocks = Array.isArray(event.message.content) ? event.message.content : [];
+          const textBlocks = blocks.filter((b: any) => b.type === 'text');
+          const toolBlocks = blocks.filter((b: any) => b.type === 'tool_use');
+
+          if (textBlocks.length > 0 && !assistantMsg.content) {
+            assistantMsg.content = textBlocks.map((b: any) => b.text).join('');
+          }
+
+          if (toolBlocks.length > 0) {
+            const currentTools = assistantMsg.toolUses || [];
+            const existingIds = new Set(currentTools.map((t) => t.id));
+            for (const tb of toolBlocks) {
+              if (!existingIds.has(tb.id)) {
+                currentTools.push({
+                  id: tb.id,
+                  name: tb.name,
+                  input: tb.input,
+                  isRunning: true,
+                });
+              }
+            }
+            assistantMsg.toolUses = currentTools;
+          }
+        }
+
+        // 蓄積: ツール実行結果
+        if (event.type === 'user' && event.message?.content) {
+          const rawContent = event.message.content;
+          if (Array.isArray(rawContent) && assistantMsg.toolUses) {
+            const toolResults = rawContent.filter((b: any) => b.type === 'tool_result');
+            if (toolResults.length > 0) {
+              assistantMsg.toolUses = assistantMsg.toolUses.map((tool) => {
+                const tr = toolResults.find((r: any) => r.tool_use_id === tool.id);
+                if (tr) {
+                  return {
+                    ...tool,
+                    isRunning: false,
+                    isError: tr.is_error || false,
+                    output: typeof tr.content === 'string' ? tr.content : JSON.stringify(tr.content),
+                  };
+                }
+                return tool;
+              });
+            }
+          }
+        }
+
+        // 蓄積: 統計
+        if (event.type === 'result') {
+          if (assistantMsg.toolUses) {
+            assistantMsg.toolUses = assistantMsg.toolUses.map((t) =>
+              t.isRunning ? { ...t, isRunning: false } : t
+            );
+          }
+          assistantMsg.stats = {
+            costUsd: event.total_cost_usd,
+            durationMs: event.duration_ms,
+            numTurns: event.num_turns,
+            subtype: event.subtype,
+          };
+        }
 
         sendToHub({
           type: 'claude_event',
@@ -512,6 +641,20 @@ function executeClaudeTurn(params: {
         knownSessions.add(capturedSessionId);
       }
 
+      // セッションメッセージの永続化
+      try {
+        if (assistantMsg.toolUses) {
+          assistantMsg.toolUses = assistantMsg.toolUses.map((t) => ({ ...t, isRunning: false }));
+        }
+        const updatedHistory = [...existingMessages, turnUserMessage, assistantMsg];
+        saveSessionHistory(capturedSessionId, updatedHistory, {
+          cwd: workDir,
+          projectId: path.basename(workDir),
+        });
+      } catch (err: any) {
+        console.warn('[Agent] Failed to persist session messages:', err.message);
+      }
+
       sendToHub({
         type: 'turn_end',
         sessionId: capturedSessionId,
@@ -519,6 +662,17 @@ function executeClaudeTurn(params: {
         signal,
         timestamp: new Date().toISOString()
       });
+
+      // 最新セッション一覧をブロードキャストして Client 側のドロワーを即時最新化
+      listSessions(undefined, workDir)
+        .then((sessions) => {
+          sendToHub({
+            type: 'sessions_list',
+            sessions,
+            timestamp: new Date().toISOString(),
+          });
+        })
+        .catch(() => {});
     });
 
     child.on('error', (err: any) => {

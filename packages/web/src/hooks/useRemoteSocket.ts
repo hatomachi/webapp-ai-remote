@@ -434,6 +434,18 @@ export function useRemoteSocket(onMessage: (msg: InboundMessage) => void) {
     return send({ type: 'list_projects', rootPath });
   }, [send]);
 
+  const listSessions = useCallback((projectId?: string, cwd?: string) => {
+    return send({ type: 'list_sessions', projectId, cwd });
+  }, [send]);
+
+  const getSessionMessages = useCallback((sessionId: string, cwd?: string) => {
+    return send({ type: 'get_session_messages', sessionId, cwd });
+  }, [send]);
+
+  const deleteSession = useCallback((sessionId: string) => {
+    return send({ type: 'delete_session', sessionId });
+  }, [send]);
+
   return {
     settings,
     updateSettings,
@@ -446,6 +458,9 @@ export function useRemoteSocket(onMessage: (msg: InboundMessage) => void) {
     availableProjects,
     projectsBaseDir,
     requestProjects,
+    listSessions,
+    getSessionMessages,
+    deleteSession,
     sendPrompt,
     abort,
     reconnect: connect,

@@ -29,6 +29,7 @@ interface SessionDrawerProps {
   onSelectSession: (sessionId: string) => void;
   onNewSession: () => void;
   onDeleteSession: (sessionId: string) => void;
+  onRefreshSessions?: () => void;
   isAgentConnected: boolean;
 }
 
@@ -48,6 +49,7 @@ export const SessionDrawer: React.FC<SessionDrawerProps> = ({
   onSelectSession,
   onNewSession,
   onDeleteSession,
+  onRefreshSessions,
   isAgentConnected,
 }) => {
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
@@ -190,6 +192,16 @@ export const SessionDrawer: React.FC<SessionDrawerProps> = ({
         <div className="flex-1 overflow-y-auto p-3 space-y-2">
           <div className="flex items-center justify-between text-[11px] font-semibold text-slate-400 uppercase px-1">
             <span>セッション履歴 ({filteredSessions.length})</span>
+            {onRefreshSessions && (
+              <button
+                onClick={onRefreshSessions}
+                disabled={!isAgentConnected}
+                className="p-1 rounded text-slate-400 hover:text-sky-400 hover:bg-slate-800 disabled:opacity-40 transition-colors"
+                title="セッション一覧を再読み込み"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+              </button>
+            )}
           </div>
 
           {filteredSessions.length === 0 ? (

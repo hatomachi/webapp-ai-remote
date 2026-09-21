@@ -351,6 +351,29 @@ export function App() {
             sessionId: currentSessionId,
           },
         ]);
+      } else if (msg.type === 'sessions_list') {
+        setSessions((prev) => {
+          const remoteIds = new Set(msg.sessions.map((s) => s.id));
+          const merged = [
+            ...msg.sessions,
+            ...prev.filter((s) => !remoteIds.has(s.id)),
+          ];
+          merged.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+          localStorage.setItem(SESSIONS_STORAGE_KEY, JSON.stringify(merged));
+          return merged;
+        });
+      } else if (msg.type === 'session_messages') {
+        if (msg.sessionId === currentSessionId) {
+          setMessages(msg.messages);
+          try {
+            localStorage.setItem(
+              `${MESSAGES_STORAGE_PREFIX}${msg.sessionId}`,
+              JSON.stringify(msg.messages)
+            );
+          } catch (e) {
+            console.error(e);
+          }
+        }
       } else if (msg.type === 'error') {
         setMessages((prev) => [
           ...prev,
@@ -381,6 +404,9 @@ export function App() {
     availableProjects,
     projectsBaseDir,
     requestProjects,
+    listSessions,
+    getSessionMessages,
+    deleteSession,
     sendPrompt,
     abort,
   } = useRemoteSocket(handleInboundMessage);
@@ -436,6 +462,20 @@ export function App() {
       }
     }
   }, [agentCwd, currentCwd, currentProject, availableProjects]);
+
+  // Agent 接続時 or カレントプロジェクト変更時に社内PCからセッション一覧を同期
+  useEffect(() => {
+    if (isAgentConnected) {
+      listSessions(currentProject?.id, currentProject?.path || currentCwd);
+    }
+  }, [isAgentConnected, currentProject, currentCwd, listSessions]);
+
+  // セッション切り替え時に社内PC（Agent）からも最新メッセージ履歴を取得して同期
+  useEffect(() => {
+    if (isAgentConnected && currentSessionId) {
+      getSessionMessages(currentSessionId, currentProject?.path || currentCwd);
+    }
+  }, [currentSessionId, isAgentConnected, currentProject, currentCwd, getSessionMessages]);
 
   // --- プロジェクト操作 ---
   const handleSelectProject = (project: ProjectInfo) => {
@@ -534,6 +574,9 @@ export function App() {
         localStorage.setItem(SESSIONS_STORAGE_KEY, JSON.stringify(next));
         return next;
       });
+      if (isAgentConnected) {
+        deleteSession(id);
+      }
       if (id === currentSessionId) {
         handleNewSession();
       }
@@ -684,6 +727,11 @@ export function App() {
         onSelectSession={(id) => setCurrentSessionId(id)}
         onNewSession={() => handleNewSession()}
         onDeleteSession={handleDeleteSession}
+        onRefreshSessions={() => {
+          if (isAgentConnected) {
+            listSessions(currentProject?.id, currentProject?.path || currentCwd);
+          }
+        }}
         isAgentConnected={isAgentConnected}
       />
 

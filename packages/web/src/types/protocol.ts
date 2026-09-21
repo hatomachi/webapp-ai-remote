@@ -75,12 +75,28 @@ export interface ProjectsListMessage {
   timestamp: string;
 }
 
+export interface SessionsListMessage {
+  type: 'sessions_list';
+  sessions: SessionInfo[];
+  projectId?: string;
+  timestamp: string;
+}
+
+export interface SessionMessagesMessage {
+  type: 'session_messages';
+  sessionId: string;
+  messages: ChatMessage[];
+  timestamp: string;
+}
+
 export type InboundMessage =
   | HubStatusMessage
   | HubErrorMessage
   | AgentHelloMessage
   | AgentStatusResponseMessage
   | ProjectsListMessage
+  | SessionsListMessage
+  | SessionMessagesMessage
   | TurnStartMessage
   | ClaudeEventMessage
   | ClaudeRawLogMessage
@@ -112,7 +128,31 @@ export interface ListProjectsMessage {
   rootPath?: string;
 }
 
-export type OutboundMessage = SendPromptMessage | AbortMessage | GetStatusMessage | ListProjectsMessage;
+export interface ListSessionsMessage {
+  type: 'list_sessions';
+  projectId?: string;
+  cwd?: string;
+}
+
+export interface GetSessionMessagesMessage {
+  type: 'get_session_messages';
+  sessionId: string;
+  cwd?: string;
+}
+
+export interface DeleteSessionMessage {
+  type: 'delete_session';
+  sessionId: string;
+}
+
+export type OutboundMessage =
+  | SendPromptMessage
+  | AbortMessage
+  | GetStatusMessage
+  | ListProjectsMessage
+  | ListSessionsMessage
+  | GetSessionMessagesMessage
+  | DeleteSessionMessage;
 
 // --- App State Types ---
 

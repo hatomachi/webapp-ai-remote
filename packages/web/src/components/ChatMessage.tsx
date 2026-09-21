@@ -6,9 +6,15 @@ import { ToolUseCard } from './ToolUseCard';
 
 interface ChatMessageProps {
   message: ChatMessageType;
+  onToolApprove?: (requestId: string) => void;
+  onToolDeny?: (requestId: string) => void;
 }
 
-export const ChatMessage: React.FC<ChatMessageProps> = ({ message }) => {
+export const ChatMessage: React.FC<ChatMessageProps> = ({
+  message,
+  onToolApprove,
+  onToolDeny,
+}) => {
   const [copied, setCopied] = useState(false);
   const isUser = message.role === 'user';
   const isSystem = message.role === 'system';
@@ -51,7 +57,12 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({ message }) => {
       {message.toolUses && message.toolUses.length > 0 && (
         <div className="mb-2 space-y-1.5">
           {message.toolUses.map((tool) => (
-            <ToolUseCard key={tool.id} tool={tool} />
+            <ToolUseCard
+              key={tool.id}
+              tool={tool}
+              onApprove={onToolApprove}
+              onDeny={onToolDeny}
+            />
           ))}
         </div>
       )}

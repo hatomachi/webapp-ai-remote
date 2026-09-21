@@ -179,6 +179,7 @@ const HOSTNAME = process.env.HOSTNAME || process.env.COMPUTERNAME || os.hostname
 let ws: WebSocket | null = null;
 let reconnectTimer: NodeJS.Timeout | null = null;
 let currentChildProcess: ChildProcess | null = null;
+const pendingApprovals = new Map<string, { child: ChildProcess; toolUseId?: string }>();
 const knownSessions = new Set<string>();
 
 /**
@@ -373,8 +374,45 @@ async function handleClientMessage(msg: any) {
       sessions,
       timestamp: new Date().toISOString()
     });
+  } else if (msg.type === 'tool_approval_response') {
+    handleToolApprovalResponse(msg);
   } else {
     console.log('[Agent] Unhandled message type:', msg.type);
+  }
+}
+
+/**
+ * ツール承認レスポンスを Claude Code プロセスの stdin へ返送
+ */
+function handleToolApprovalResponse(msg: {
+  requestId: string;
+  behavior: 'allow' | 'deny';
+  message?: string;
+}) {
+  const pending = pendingApprovals.get(msg.requestId);
+  if (pending && pending.child && !pending.child.killed) {
+    console.log(`[Agent] ➡️ Forwarding tool approval to Claude: ${msg.requestId} -> ${msg.behavior}`);
+    const responsePayload = {
+      type: 'control_response',
+      response: {
+        subtype: 'success',
+        request_id: msg.requestId,
+        response: msg.behavior === 'allow'
+          ? { behavior: 'allow' }
+          : {
+              behavior: 'deny',
+              message: msg.message || 'Permission denied by user via mobile cockpit'
+            }
+      }
+    };
+    try {
+      pending.child.stdin?.write(JSON.stringify(responsePayload) + '\n');
+    } catch (err: any) {
+      console.error('[Agent] Failed to write control response to child stdin:', err.message);
+    }
+    pendingApprovals.delete(msg.requestId);
+  } else {
+    console.warn(`[Agent] No pending approval found for requestId: ${msg.requestId}`);
   }
 }
 
@@ -385,6 +423,7 @@ function abortCurrentTurn() {
   if (currentChildProcess) {
     console.log('[Agent] Aborting current Claude process...');
     currentChildProcess.kill('SIGINT');
+    pendingApprovals.clear();
     sendToHub({
       type: 'execution_aborted',
       timestamp: new Date().toISOString()
@@ -401,6 +440,7 @@ async function executeClaudeTurn(params: {
   isResume?: boolean;
   cwd?: string;
   permissionMode?: string;
+  model?: string;
 }) {
   if (currentChildProcess) {
     sendToHub({
@@ -449,13 +489,18 @@ async function executeClaudeTurn(params: {
 
   const runProcess = (resumeMode: boolean) => {
     const args: string[] = [
-      '-p',
-      prompt,
+      '--print',
       '--output-format=stream-json',
+      '--input-format=stream-json',
       '--include-partial-messages',
       '--verbose',
-      `--permission-mode=${permissionMode}`
+      `--permission-mode=${permissionMode}`,
+      '--permission-prompt-tool=stdio'
     ];
+
+    if (params.model && params.model.trim()) {
+      args.push('--model', params.model.trim());
+    }
 
     if (resumeMode) {
       args.push('--resume', activeSessionId);
@@ -465,6 +510,9 @@ async function executeClaudeTurn(params: {
 
     console.log(`[Agent] Launching Claude: ${CLAUDE_BIN} ${args.join(' ')}`);
     console.log(`[Agent] Session ID: ${activeSessionId} (isResume: ${resumeMode})`);
+    if (params.model) {
+      console.log(`[Agent] Model     : ${params.model.trim()}`);
+    }
     console.log(`[Agent] Working dir: ${workDir}`);
 
     sendToHub({
@@ -502,12 +550,26 @@ async function executeClaudeTurn(params: {
         ...process.env,
         FORCE_COLOR: '0'
       },
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: ['pipe', 'pipe', 'pipe'],
       shell: isWindows
     });
 
     currentChildProcess = child;
     let capturedSessionId = activeSessionId;
+
+    // stdin への初期ユーザープロンプト投入（--input-format=stream-json 形式）
+    const initialUserMsg = {
+      type: 'user',
+      message: {
+        role: 'user',
+        content: prompt
+      }
+    };
+    try {
+      child.stdin?.write(JSON.stringify(initialUserMsg) + '\n');
+    } catch (err: any) {
+      console.error('[Agent] Failed to write initial prompt to child stdin:', err.message);
+    }
 
     // stdout を 1 行ずつ JSON パースして Hub へ転送 & メッセージ蓄積
     const readlineStdout = createInterface({ input: child.stdout });
@@ -581,8 +643,40 @@ async function executeClaudeTurn(params: {
           }
         }
 
+        // 承認要求: control_request (can_use_tool)
+        if (event.type === 'control_request' && event.request?.subtype === 'can_use_tool') {
+          const req = event.request;
+          const reqId = event.request_id;
+          pendingApprovals.set(reqId, { child, toolUseId: req.tool_use_id });
+          console.log(`[Agent] ⚠️ Tool approval requested: ${req.tool_name} (request_id: ${reqId})`);
+
+          // 蓄積メッセージの該当ツールを pending に更新
+          if (req.tool_use_id && assistantMsg.toolUses) {
+            assistantMsg.toolUses = assistantMsg.toolUses.map((t) => {
+              if (t.id === req.tool_use_id) {
+                return { ...t, approvalState: 'pending', approvalRequestId: reqId };
+              }
+              return t;
+            });
+          }
+
+          sendToHub({
+            type: 'tool_approval_request',
+            requestId: reqId,
+            toolUseId: req.tool_use_id,
+            toolName: req.tool_name,
+            input: req.input,
+            description: req.description,
+            decisionReason: req.decision_reason,
+            timestamp: new Date().toISOString()
+          });
+        }
+
         // 蓄積: 統計
         if (event.type === 'result') {
+          try {
+            child.stdin?.end();
+          } catch {}
           if (assistantMsg.toolUses) {
             assistantMsg.toolUses = assistantMsg.toolUses.map((t) =>
               t.isRunning ? { ...t, isRunning: false } : t
@@ -628,6 +722,7 @@ async function executeClaudeTurn(params: {
     child.on('close', (code, signal) => {
       console.log(`[Agent] Claude process exited with code ${code}, signal ${signal}`);
       currentChildProcess = null;
+      pendingApprovals.clear();
 
       // もし --resume で過去セッションが見つからずに即終了した場合、--session-id で自動フォールバック再試行！
       if (resumeMode && resumeNotFound && !hasOutput) {
@@ -678,6 +773,7 @@ async function executeClaudeTurn(params: {
     child.on('error', (err: any) => {
       console.error('[Agent] Failed to spawn Claude process:', err);
       currentChildProcess = null;
+      pendingApprovals.clear();
 
       let errorDetail = err.message;
       if (err.code === 'ENOENT') {

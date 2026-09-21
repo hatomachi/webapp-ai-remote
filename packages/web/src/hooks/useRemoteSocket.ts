@@ -9,11 +9,18 @@ import {
   ActiveTransport,
 } from '../types/protocol';
 
+export const DEFAULT_AVAILABLE_MODELS = [
+  'claude-opus-4-7',
+  'claude-sonnet-4-6',
+  'claude-haiku-4-5',
+];
+
 export interface SocketSettings {
   hubUrl: string;
   authToken: string;
   defaultCwd: string;
   transportMode?: TransportMode;
+  availableModels?: string[];
 }
 
 const SETTINGS_KEY = 'ai_remote_settings_v1';
@@ -46,6 +53,7 @@ export function getDefaultSettings(): SocketSettings {
     authToken: '',
     defaultCwd: '',
     transportMode: 'auto',
+    availableModels: [...DEFAULT_AVAILABLE_MODELS],
   };
 }
 
@@ -94,6 +102,9 @@ export function loadSettings(): SocketSettings {
     const saved = localStorage.getItem(SETTINGS_KEY);
     if (saved) {
       initial = { ...initial, ...JSON.parse(saved) };
+    }
+    if (!initial.availableModels || !Array.isArray(initial.availableModels) || initial.availableModels.length === 0) {
+      initial.availableModels = [...DEFAULT_AVAILABLE_MODELS];
     }
   } catch (e) {
     console.error('Failed to parse settings from localStorage', e);
@@ -404,7 +415,8 @@ export function useRemoteSocket(onMessage: (msg: InboundMessage) => void) {
     sessionId?: string,
     isResume?: boolean,
     cwd?: string,
-    permissionMode: PermissionMode = 'acceptEdits'
+    permissionMode: PermissionMode = 'acceptEdits',
+    model?: string
   ) => {
     const payload: SendPromptMessage = {
       type: 'prompt',
@@ -413,6 +425,7 @@ export function useRemoteSocket(onMessage: (msg: InboundMessage) => void) {
       isResume,
       cwd: cwd || settings.defaultCwd || agentCwd || undefined,
       permissionMode,
+      model,
     };
     const ok = send(payload);
     if (ok) {
@@ -446,6 +459,20 @@ export function useRemoteSocket(onMessage: (msg: InboundMessage) => void) {
     return send({ type: 'delete_session', sessionId });
   }, [send]);
 
+  const sendToolApproval = useCallback((
+    requestId: string,
+    behavior: 'allow' | 'deny',
+    message?: string
+  ) => {
+    console.log(`[RemoteSocket] Sending tool approval: ${requestId} -> ${behavior}`);
+    return send({
+      type: 'tool_approval_response',
+      requestId,
+      behavior,
+      message,
+    });
+  }, [send]);
+
   return {
     settings,
     updateSettings,
@@ -461,6 +488,7 @@ export function useRemoteSocket(onMessage: (msg: InboundMessage) => void) {
     listSessions,
     getSessionMessages,
     deleteSession,
+    sendToolApproval,
     sendPrompt,
     abort,
     reconnect: connect,

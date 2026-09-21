@@ -1,11 +1,11 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Send, Square, AlertCircle, ShieldAlert, Cpu } from 'lucide-react';
+import { Send, Square, AlertCircle, ShieldAlert, Cpu, Bot } from 'lucide-react';
 import { Header } from './components/Header';
 import { ChatMessage } from './components/ChatMessage';
 import { QuickActions } from './components/QuickActions';
 import { SessionDrawer } from './components/SessionDrawer';
 import { SettingsModal } from './components/SettingsModal';
-import { useRemoteSocket } from './hooks/useRemoteSocket';
+import { useRemoteSocket, DEFAULT_AVAILABLE_MODELS } from './hooks/useRemoteSocket';
 import {
   InboundMessage,
   ChatMessage as ChatMessageType,
@@ -18,6 +18,7 @@ import {
 const SESSIONS_STORAGE_KEY = 'ai_remote_sessions_v1';
 const PROJECTS_STORAGE_KEY = 'ai_remote_projects_v1';
 const MESSAGES_STORAGE_PREFIX = 'ai_remote_msgs_';
+const MODEL_STORAGE_KEY = 'ai_remote_selected_model_v1';
 
 function generateUUID(): string {
   if (typeof crypto !== 'undefined' && crypto.randomUUID) {
@@ -72,6 +73,13 @@ export function App() {
 
   const [currentCwd, setCurrentCwd] = useState<string>('');
   const [permissionMode, setPermissionMode] = useState<PermissionMode>('acceptEdits');
+  const [selectedModel, setSelectedModel] = useState<string>(() => {
+    try {
+      const saved = localStorage.getItem(MODEL_STORAGE_KEY);
+      if (saved) return saved;
+    } catch {}
+    return DEFAULT_AVAILABLE_MODELS[0];
+  });
 
   // --- メッセージ履歴 ---
   const [messages, setMessages] = useState<ChatMessageType[]>([]);
@@ -374,6 +382,48 @@ export function App() {
             console.error(e);
           }
         }
+      } else if (msg.type === 'tool_approval_request') {
+        console.log('[App] ⚠️ Tool approval request received:', msg.toolName, msg.requestId);
+        setMessages((prev) => {
+          const last = prev[prev.length - 1];
+          if (!last || last.role !== 'assistant') return prev;
+
+          let updated = false;
+          let tools = (last.toolUses || []).map((tool) => {
+            if (msg.toolUseId && tool.id === msg.toolUseId) {
+              updated = true;
+              return {
+                ...tool,
+                approvalState: 'pending' as const,
+                approvalRequestId: msg.requestId,
+                isRunning: false,
+              };
+            }
+            return tool;
+          });
+
+          if (!updated) {
+            tools = [
+              ...tools,
+              {
+                id: msg.toolUseId || `tool-${Date.now()}`,
+                name: msg.toolName,
+                input: msg.input,
+                isRunning: false,
+                approvalState: 'pending' as const,
+                approvalRequestId: msg.requestId,
+              },
+            ];
+          }
+
+          return [
+            ...prev.slice(0, -1),
+            {
+              ...last,
+              toolUses: tools,
+            },
+          ];
+        });
       } else if (msg.type === 'error') {
         setMessages((prev) => [
           ...prev,
@@ -407,9 +457,31 @@ export function App() {
     listSessions,
     getSessionMessages,
     deleteSession,
+    sendToolApproval,
     sendPrompt,
     abort,
   } = useRemoteSocket(handleInboundMessage);
+
+  // 利用可能モデルの変更時に選択中モデルを同期・フォールバック
+  useEffect(() => {
+    const available = settings.availableModels;
+    if (available && available.length > 0) {
+      if (!selectedModel || !available.includes(selectedModel)) {
+        const fallback = available[0];
+        setSelectedModel(fallback);
+        try {
+          localStorage.setItem(MODEL_STORAGE_KEY, fallback);
+        } catch {}
+      }
+    }
+  }, [settings.availableModels, selectedModel]);
+
+  const handleSelectModel = (modelName: string) => {
+    setSelectedModel(modelName);
+    try {
+      localStorage.setItem(MODEL_STORAGE_KEY, modelName);
+    } catch {}
+  };
 
   // PC側から利用可能なプロジェクト候補が取得された時、未登録なら自動登録
   useEffect(() => {
@@ -553,7 +625,14 @@ export function App() {
     const isResume = messages.some((m) => m.role === 'assistant' && !m.isError);
 
     // WebSocket で Agent に送信
-    sendPrompt(text, currentSessionId, isResume, currentCwd || currentProject?.path || undefined, permissionMode);
+    sendPrompt(
+      text,
+      currentSessionId,
+      isResume,
+      currentCwd || currentProject?.path || undefined,
+      permissionMode,
+      selectedModel
+    );
   };
 
   // --- 新規セッション開始 ---
@@ -585,6 +664,53 @@ export function App() {
     }
   };
 
+  // --- ツール実行承認ハンドラ ---
+  const handleToolApprove = useCallback(
+    (requestId: string) => {
+      console.log('[App] Approving tool request:', requestId);
+      sendToolApproval(requestId, 'allow');
+      setMessages((prev) =>
+        prev.map((m) => {
+          if (!m.toolUses) return m;
+          return {
+            ...m,
+            toolUses: m.toolUses.map((t) =>
+              t.approvalRequestId === requestId
+                ? { ...t, approvalState: 'allowed' as const, isRunning: true }
+                : t
+            ),
+          };
+        })
+      );
+    },
+    [sendToolApproval]
+  );
+
+  const handleToolDeny = useCallback(
+    (requestId: string) => {
+      console.log('[App] Denying tool request:', requestId);
+      sendToolApproval(requestId, 'deny');
+      setMessages((prev) =>
+        prev.map((m) => {
+          if (!m.toolUses) return m;
+          return {
+            ...m,
+            toolUses: m.toolUses.map((t) =>
+              t.approvalRequestId === requestId
+                ? { ...t, approvalState: 'denied' as const, isRunning: false }
+                : t
+            ),
+          };
+        })
+      );
+    },
+    [sendToolApproval]
+  );
+
+  const hasPendingApproval = messages.some((m) =>
+    m.toolUses?.some((t) => t.approvalState === 'pending')
+  );
+
   const activeSessionTitle =
     sessions.find((s) => s.id === currentSessionId)?.title ||
     messages.find((m) => m.role === 'user')?.content.slice(0, 25) ||
@@ -604,6 +730,26 @@ export function App() {
         onOpenDrawer={() => setIsDrawerOpen(true)}
         onOpenSettings={() => setIsSettingsOpen(true)}
       />
+
+      {/* ツール承認待ち通知バナー */}
+      {hasPendingApproval && (
+        <div className="bg-amber-950/80 border-b border-amber-800/80 px-4 py-2 flex items-center justify-between text-xs text-amber-200 select-none animate-pulse shrink-0">
+          <div className="flex items-center space-x-2">
+            <ShieldAlert className="w-4 h-4 text-amber-400 shrink-0" />
+            <span className="font-medium">⚠️ ツール実行の承認待ちがあります</span>
+          </div>
+          <button
+            onClick={() => {
+              if (chatContainerRef.current) {
+                chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
+              }
+            }}
+            className="text-[11px] underline text-amber-300 hover:text-amber-100 shrink-0 ml-2"
+          >
+            下へスクロール
+          </button>
+        </div>
+      )}
 
       {/* メインチャットタイムライン */}
       <main
@@ -631,7 +777,14 @@ export function App() {
             )}
           </div>
         ) : (
-          messages.map((msg) => <ChatMessage key={msg.id} message={msg} />)
+          messages.map((msg) => (
+            <ChatMessage
+              key={msg.id}
+              message={msg}
+              onToolApprove={handleToolApprove}
+              onToolDeny={handleToolDeny}
+            />
+          ))
         )}
       </main>
 
@@ -643,24 +796,48 @@ export function App() {
 
       {/* フッター（プロンプト入力 & 送信 / 中断） */}
       <footer className="safe-bottom bg-slate-900 border-t border-slate-800 p-2.5 shrink-0 select-none">
-        {/* 権限モードの選択トグル */}
-        <div className="flex items-center justify-between text-[11px] text-slate-400 px-1 mb-2">
-          <div className="flex items-center space-x-1.5">
-            <ShieldAlert className="w-3.5 h-3.5 text-sky-400" />
-            <span>Mode:</span>
-            <select
-              value={permissionMode}
-              onChange={(e) => setPermissionMode(e.target.value as PermissionMode)}
-              className="bg-slate-800 border border-slate-700 rounded px-1.5 py-0.5 text-[10px] text-slate-200 outline-none"
-            >
-              <option value="acceptEdits">acceptEdits (編集自動承認)</option>
-              <option value="bypassPermissions">bypassPermissions (全自動)</option>
-              <option value="default">default (手動承認)</option>
-            </select>
+        {/* 権限モード & モデル選択バー */}
+        <div className="flex flex-wrap items-center justify-between text-[11px] text-slate-400 px-1 mb-2 gap-2">
+          <div className="flex items-center space-x-3 flex-wrap gap-y-1">
+            {/* モデル選択プルダウン */}
+            <div className="flex items-center space-x-1.5">
+              <Bot className="w-3.5 h-3.5 text-purple-400 shrink-0" />
+              <span className="shrink-0 text-slate-400">Model:</span>
+              <select
+                value={selectedModel}
+                onChange={(e) => handleSelectModel(e.target.value)}
+                className="bg-slate-800 border border-slate-700 hover:border-purple-500/60 rounded px-1.5 py-0.5 text-[10px] text-purple-200 font-mono outline-none max-w-[155px] truncate transition-colors"
+                title="Claude Code CLI に渡すモデル (--model)"
+              >
+                {(settings.availableModels && settings.availableModels.length > 0
+                  ? settings.availableModels
+                  : DEFAULT_AVAILABLE_MODELS
+                ).map((m, idx) => (
+                  <option key={m} value={m}>
+                    {m}{idx === 0 ? ' (デフォルト)' : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* 権限モードの選択トグル */}
+            <div className="flex items-center space-x-1.5">
+              <ShieldAlert className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+              <span className="shrink-0 text-slate-400">Mode:</span>
+              <select
+                value={permissionMode}
+                onChange={(e) => setPermissionMode(e.target.value as PermissionMode)}
+                className="bg-slate-800 border border-slate-700 hover:border-sky-500/60 rounded px-1.5 py-0.5 text-[10px] text-slate-200 outline-none transition-colors"
+              >
+                <option value="acceptEdits">acceptEdits (編集自動承認)</option>
+                <option value="bypassPermissions">bypassPermissions (全自動)</option>
+                <option value="default">default (手動承認)</option>
+              </select>
+            </div>
           </div>
 
           {currentCwd && (
-            <div className="truncate max-w-[140px] font-mono text-[10px] text-slate-500">
+            <div className="truncate max-w-[120px] font-mono text-[10px] text-slate-500 shrink-0">
               {currentCwd.split('/').pop()}
             </div>
           )}

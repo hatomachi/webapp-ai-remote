@@ -89,6 +89,17 @@ export interface SessionMessagesMessage {
   timestamp: string;
 }
 
+export interface ToolApprovalRequestMessage {
+  type: 'tool_approval_request';
+  requestId: string;
+  toolUseId?: string;
+  toolName: string;
+  input: any;
+  description?: string;
+  decisionReason?: string;
+  timestamp: string;
+}
+
 export type InboundMessage =
   | HubStatusMessage
   | HubErrorMessage
@@ -102,7 +113,8 @@ export type InboundMessage =
   | ClaudeRawLogMessage
   | TurnEndMessage
   | TurnErrorMessage
-  | ExecutionAbortedMessage;
+  | ExecutionAbortedMessage
+  | ToolApprovalRequestMessage;
 
 // --- Outbound Messages ---
 
@@ -113,6 +125,7 @@ export interface SendPromptMessage {
   isResume?: boolean;
   cwd?: string;
   permissionMode?: PermissionMode;
+  model?: string;
 }
 
 export interface AbortMessage {
@@ -145,6 +158,13 @@ export interface DeleteSessionMessage {
   sessionId: string;
 }
 
+export interface ToolApprovalResponseMessage {
+  type: 'tool_approval_response';
+  requestId: string;
+  behavior: 'allow' | 'deny';
+  message?: string;
+}
+
 export type OutboundMessage =
   | SendPromptMessage
   | AbortMessage
@@ -152,7 +172,8 @@ export type OutboundMessage =
   | ListProjectsMessage
   | ListSessionsMessage
   | GetSessionMessagesMessage
-  | DeleteSessionMessage;
+  | DeleteSessionMessage
+  | ToolApprovalResponseMessage;
 
 // --- App State Types ---
 
@@ -170,6 +191,8 @@ export interface ToolUseItem {
   output?: string;
   isRunning: boolean;
   isError?: boolean;
+  approvalState?: 'pending' | 'allowed' | 'denied';
+  approvalRequestId?: string;
 }
 
 export interface ResultStats {

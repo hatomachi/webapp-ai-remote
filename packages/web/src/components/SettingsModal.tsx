@@ -194,52 +194,43 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </p>
           </div>
 
-          {/* キャッシュ管理・PWA更新 */}
-          <div className="pt-3 border-t border-slate-800">
-            <div className="flex items-center justify-between mb-1.5">
-              <label className="text-slate-400 font-medium flex items-center space-x-1">
-                <RefreshCw className="w-3.5 h-3.5 text-rose-400" />
-                <span>キャッシュ管理 (PWA更新)</span>
-              </label>
-              <button
-                type="button"
-                onClick={handleClearCache}
-                disabled={isClearingCache}
-                className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-slate-950 hover:bg-rose-950/40 border border-slate-700 hover:border-rose-500/50 text-rose-300 text-[11px] font-medium transition-all active:scale-95 disabled:opacity-50"
-              >
-                <RefreshCw className={`w-3.5 h-3.5 ${isClearingCache ? 'animate-spin' : ''}`} />
-                <span>{isClearingCache ? '更新中...' : 'キャッシュ更新・再読込'}</span>
-              </button>
-            </div>
-            <p className="text-[10px] text-slate-500 leading-normal">
-              スマホ（Edge等）で古いキャッシュが原因で接続失敗する場合、Service WorkerとPWAアセットキャッシュを全消去して最新版を再取得します（※接続設定は保持されます）。
-            </p>
-            {clearStatus && (
-              <div className="mt-2 p-2 rounded-lg bg-rose-950/40 border border-rose-800/40 text-rose-200 text-[10px] text-center font-mono">
-                {clearStatus}
-              </div>
-            )}
-          </div>
-
           {/* ボタングループ */}
-          <div className="pt-3 flex items-center justify-between border-t border-slate-800">
+          <div className="pt-3.5 flex items-center justify-between gap-2 border-t border-slate-800">
             <button
               type="button"
               onClick={handleReset}
-              className="flex items-center space-x-1 px-3 py-2 rounded-lg bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700 transition-colors"
+              className="flex items-center space-x-1 px-2.5 py-2 rounded-lg bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700 text-xs transition-colors shrink-0"
+              title="初期値に戻す"
             >
               <RotateCcw className="w-3.5 h-3.5" />
               <span>初期値に戻す</span>
             </button>
 
             <button
-              type="submit"
-              className="flex items-center space-x-1.5 px-4 py-2 rounded-lg bg-sky-600 hover:bg-sky-500 text-white font-medium shadow-md shadow-sky-950/50 active:scale-95 transition-all"
+              type="button"
+              onClick={handleClearCache}
+              disabled={isClearingCache}
+              className="flex items-center space-x-1 px-2.5 py-2 rounded-lg bg-slate-800 hover:bg-rose-950/40 border border-slate-700 hover:border-rose-500/50 text-rose-300 text-xs font-medium transition-all active:scale-95 disabled:opacity-50 shrink-0"
+              title="Service WorkerとPWAキャッシュを全消去して最新版を再読み込み"
             >
-              <Save className="w-4 h-4" />
+              <RefreshCw className={`w-3.5 h-3.5 ${isClearingCache ? 'animate-spin' : ''}`} />
+              <span>{isClearingCache ? '更新中...' : 'キャッシュ更新'}</span>
+            </button>
+
+            <button
+              type="submit"
+              className="flex items-center space-x-1 px-3 py-2 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-medium shadow-md shadow-sky-950/50 active:scale-95 transition-all shrink-0"
+            >
+              <Save className="w-3.5 h-3.5" />
               <span>保存して再接続</span>
             </button>
           </div>
+
+          {clearStatus && (
+            <div className="p-2 rounded-lg bg-rose-950/40 border border-rose-800/40 text-rose-200 text-[10px] text-center font-mono animate-pulse">
+              {clearStatus}
+            </div>
+          )}
         </form>
       </div>
     </div>

@@ -609,7 +609,7 @@ export function App() {
       <main
         ref={chatContainerRef}
         onScroll={handleScroll}
-        className="flex-1 overflow-y-auto px-3 py-4 space-y-2 select-text"
+        className="flex-1 overflow-y-auto px-3.5 py-3 space-y-3 select-text"
       >
         {messages.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-center px-4 py-8 select-none">

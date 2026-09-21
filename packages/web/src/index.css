@@ -45,13 +45,13 @@ body {
 
 /* コードブロックやマークダウン内のスタイル */
 pre {
-  background-color: #0f172a !important;
+  background-color: #050814 !important;
   border: 1px solid #1e293b;
-  border-radius: 0.5rem;
-  padding: 0.75rem 1rem;
+  border-radius: 0.75rem;
+  padding: 0.75rem;
   overflow-x: auto;
-  font-size: 0.825rem;
-  line-height: 1.4;
+  font-size: 12.5px;
+  line-height: 1.5;
 }
 
 code {
@@ -61,10 +61,11 @@ code {
 :not(pre) > code {
   background-color: #1e293b;
   color: #38bdf8;
-  padding: 0.15rem 0.35rem;
+  padding: 0.125rem 0.35rem;
   border-radius: 0.25rem;
-  font-size: 0.85em;
+  font-size: 13px;
 }
+
 
 /* アニメーション用キーフレーム */
 @keyframes pulse-subtle {

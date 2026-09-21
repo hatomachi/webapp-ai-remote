@@ -65,29 +65,29 @@ export const ToolUseCard: React.FC<ToolUseCardProps> = ({ tool }) => {
   const summaryText = getSummary();
 
   return (
-    <div className="my-2 rounded-lg border border-slate-800 bg-slate-900/90 overflow-hidden text-xs shadow-sm">
+    <div className="my-1.5 rounded-xl border border-slate-800/80 bg-slate-900/60 overflow-hidden text-xs shadow-sm w-full">
       {/* カードヘッダー */}
       <div
         onClick={() => setIsOpen(!isOpen)}
-        className="flex items-center justify-between p-2.5 cursor-pointer hover:bg-slate-850 transition-colors select-none"
+        className="flex items-center justify-between px-3 py-2 cursor-pointer hover:bg-slate-800/50 transition-colors select-none"
       >
-        <div className="flex items-center space-x-2 min-w-0 flex-1">
-          <div className="p-1 rounded bg-slate-950 border border-slate-800">
+        <div className="flex items-center space-x-2 min-w-0 flex-1 mr-2">
+          <div className="p-1 rounded-md bg-slate-950 border border-slate-800/80 shrink-0">
             {meta.icon}
           </div>
-          <span className={`px-1.5 py-0.5 rounded text-[10px] font-mono border ${meta.badgeColor}`}>
+          <span className={`px-1.5 py-0.5 rounded text-[10.5px] font-mono border shrink-0 ${meta.badgeColor}`}>
             {meta.label}
           </span>
-          <span className="font-mono text-slate-300 truncate max-w-[200px] xs:max-w-[260px]">
+          <span className="font-mono text-slate-300 truncate text-[12px] flex-1">
             {summaryText}
           </span>
         </div>
 
-        <div className="flex items-center space-x-1.5 ml-2 shrink-0">
+        <div className="flex items-center space-x-1.5 shrink-0">
           {tool.isRunning ? (
-            <span className="flex items-center text-amber-400 text-[11px] space-x-1">
+            <span className="flex items-center text-amber-400 text-[11px] space-x-1 font-medium">
               <Loader2 className="w-3.5 h-3.5 animate-spin" />
-              <span className="hidden xs:inline">実行中</span>
+              <span>実行中</span>
             </span>
           ) : tool.isError ? (
             <AlertCircle className="w-4 h-4 text-rose-400" />
@@ -105,13 +105,13 @@ export const ToolUseCard: React.FC<ToolUseCardProps> = ({ tool }) => {
 
       {/* アコーディオン詳細展開 */}
       {isOpen && (
-        <div className="p-2.5 border-t border-slate-800/80 bg-slate-950/80 space-y-2 text-[11px]">
+        <div className="p-3 border-t border-slate-800/80 bg-slate-950/70 space-y-2.5 text-[11.5px]">
           {/* Tool Input */}
           <div>
             <div className="text-[10px] uppercase font-semibold text-slate-500 mb-1">
               Tool Input:
             </div>
-            <pre className="text-slate-300 font-mono text-[11px] p-2 rounded bg-slate-900 border border-slate-800 overflow-x-auto max-h-48">
+            <pre className="text-slate-300 font-mono text-[11.5px] p-2.5 rounded-lg bg-slate-900/90 border border-slate-800 overflow-x-auto max-h-48 leading-relaxed">
               {typeof tool.input === 'string'
                 ? tool.input
                 : JSON.stringify(tool.input, null, 2)}
@@ -124,7 +124,7 @@ export const ToolUseCard: React.FC<ToolUseCardProps> = ({ tool }) => {
               <div className="text-[10px] uppercase font-semibold text-slate-500 mb-1">
                 Tool Output:
               </div>
-              <pre className="text-slate-300 font-mono text-[11px] p-2 rounded bg-slate-900 border border-slate-800 overflow-x-auto max-h-56 whitespace-pre-wrap break-all">
+              <pre className="text-slate-300 font-mono text-[11.5px] p-2.5 rounded-lg bg-slate-900/90 border border-slate-800 overflow-x-auto max-h-56 whitespace-pre-wrap break-all leading-relaxed">
                 {tool.output}
               </pre>
             </div>
@@ -134,3 +134,4 @@ export const ToolUseCard: React.FC<ToolUseCardProps> = ({ tool }) => {
     </div>
   );
 };
+

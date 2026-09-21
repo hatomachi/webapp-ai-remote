@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { X, Save, RotateCcw, ShieldCheck, Server, Folder, Radio } from 'lucide-react';
+import { X, Save, RotateCcw, ShieldCheck, Server, Folder, Radio, RefreshCw } from 'lucide-react';
 import { getDefaultSettings, SocketSettings } from '../hooks/useRemoteSocket';
 import { TransportMode } from '../types/protocol';
 
@@ -22,6 +22,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [transportMode, setTransportMode] = useState<TransportMode>(
     currentSettings.transportMode || 'auto'
   );
+  const [isClearingCache, setIsClearingCache] = useState(false);
+  const [clearStatus, setClearStatus] = useState<string | null>(null);
 
   if (!isOpen) return null;
 
@@ -42,6 +44,43 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setAuthToken(def.authToken);
     setDefaultCwd(def.defaultCwd);
     setTransportMode(def.transportMode || 'auto');
+  };
+
+  const handleClearCache = async () => {
+    if (isClearingCache) return;
+    setIsClearingCache(true);
+    setClearStatus('キャッシュとService Workerを削除中...');
+
+    try {
+      // 1. Service Worker の登録解除
+      if ('serviceWorker' in navigator) {
+        const registrations = await navigator.serviceWorker.getRegistrations();
+        for (const reg of registrations) {
+          await reg.unregister();
+        }
+      }
+
+      // 2. CacheStorage の完全消去
+      if ('caches' in window) {
+        const keys = await caches.keys();
+        for (const key of keys) {
+          await caches.delete(key);
+        }
+      }
+
+      setClearStatus('キャッシュ削除完了。最新版を再読み込みします...');
+      setTimeout(() => {
+        const url = new URL(window.location.href);
+        url.searchParams.set('_t', Date.now().toString());
+        window.location.href = url.toString();
+      }, 500);
+    } catch (err: any) {
+      console.error('Failed to clear cache:', err);
+      setClearStatus('再読み込み中...');
+      setTimeout(() => {
+        window.location.reload();
+      }, 500);
+    }
   };
 
   return (
@@ -153,6 +192,33 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             <p className="text-[10px] text-slate-500 mt-1">
               社内プロキシや ZTNA で WebSocket が遮断されるスマホ（Edge等）では「自動」または「HTTP」をお選びください
             </p>
+          </div>
+
+          {/* キャッシュ管理・PWA更新 */}
+          <div className="pt-3 border-t border-slate-800">
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="text-slate-400 font-medium flex items-center space-x-1">
+                <RefreshCw className="w-3.5 h-3.5 text-rose-400" />
+                <span>キャッシュ管理 (PWA更新)</span>
+              </label>
+              <button
+                type="button"
+                onClick={handleClearCache}
+                disabled={isClearingCache}
+                className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-slate-950 hover:bg-rose-950/40 border border-slate-700 hover:border-rose-500/50 text-rose-300 text-[11px] font-medium transition-all active:scale-95 disabled:opacity-50"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isClearingCache ? 'animate-spin' : ''}`} />
+                <span>{isClearingCache ? '更新中...' : 'キャッシュ更新・再読込'}</span>
+              </button>
+            </div>
+            <p className="text-[10px] text-slate-500 leading-normal">
+              スマホ（Edge等）で古いキャッシュが原因で接続失敗する場合、Service WorkerとPWAアセットキャッシュを全消去して最新版を再取得します（※接続設定は保持されます）。
+            </p>
+            {clearStatus && (
+              <div className="mt-2 p-2 rounded-lg bg-rose-950/40 border border-rose-800/40 text-rose-200 text-[10px] text-center font-mono">
+                {clearStatus}
+              </div>
+            )}
           </div>
 
           {/* ボタングループ */}

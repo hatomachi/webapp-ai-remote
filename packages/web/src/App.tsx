@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Send, Square, AlertCircle, ShieldAlert, Cpu, Bot } from 'lucide-react';
+import { Send, Square, AlertCircle, ShieldAlert, Cpu, Bot, Type } from 'lucide-react';
 import { Header } from './components/Header';
 import { ChatMessage } from './components/ChatMessage';
 import { QuickActions } from './components/QuickActions';
@@ -19,6 +19,8 @@ const SESSIONS_STORAGE_KEY = 'ai_remote_sessions_v1';
 const PROJECTS_STORAGE_KEY = 'ai_remote_projects_v1';
 const MESSAGES_STORAGE_PREFIX = 'ai_remote_msgs_';
 const MODEL_STORAGE_KEY = 'ai_remote_selected_model_v1';
+const FONT_SIZE_STORAGE_KEY = 'ai_remote_font_size_v1';
+const DEFAULT_FONT_SIZE = 15;
 
 function generateUUID(): string {
   if (typeof crypto !== 'undefined' && crypto.randomUUID) {
@@ -80,6 +82,24 @@ export function App() {
     } catch {}
     return DEFAULT_AVAILABLE_MODELS[0];
   });
+
+  const [fontSize, setFontSize] = useState<number>(() => {
+    try {
+      const saved = localStorage.getItem(FONT_SIZE_STORAGE_KEY);
+      if (saved) {
+        const val = Number(saved);
+        if (!isNaN(val) && val >= 10 && val <= 24) return val;
+      }
+    } catch {}
+    return DEFAULT_FONT_SIZE;
+  });
+
+  const handleSelectFontSize = (size: number) => {
+    setFontSize(size);
+    try {
+      localStorage.setItem(FONT_SIZE_STORAGE_KEY, String(size));
+    } catch {}
+  };
 
   // --- メッセージ履歴 ---
   const [messages, setMessages] = useState<ChatMessageType[]>([]);
@@ -751,10 +771,11 @@ export function App() {
         </div>
       )}
 
-      {/* メインチャットタイムライン */}
+      {/* メインチャットタイムライン（選択フォントサイズをコンテナ基準値として適用） */}
       <main
         ref={chatContainerRef}
         onScroll={handleScroll}
+        style={{ fontSize: `${fontSize}px` }}
         className="flex-1 overflow-y-auto px-3.5 py-3 space-y-3 select-text"
       >
         {messages.length === 0 ? (
@@ -832,6 +853,26 @@ export function App() {
                 <option value="acceptEdits">acceptEdits (編集自動承認)</option>
                 <option value="bypassPermissions">bypassPermissions (全自動)</option>
                 <option value="default">default (手動承認)</option>
+              </select>
+            </div>
+
+            {/* 文字サイズプルダウン */}
+            <div className="flex items-center space-x-1.5">
+              <Type className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+              <span className="shrink-0 text-slate-400">Size:</span>
+              <select
+                value={fontSize}
+                onChange={(e) => handleSelectFontSize(Number(e.target.value))}
+                className="bg-slate-800 border border-slate-700 hover:border-sky-500/60 rounded px-1.5 py-0.5 text-[10px] text-sky-200 font-mono outline-none transition-colors"
+                title="表示文字サイズの一括調整"
+              >
+                <option value={12}>12px (極小)</option>
+                <option value={13}>13px (小)</option>
+                <option value={14}>14px (やや小)</option>
+                <option value={15}>15px (標準)</option>
+                <option value={16}>16px (やや大)</option>
+                <option value={17}>17px (大)</option>
+                <option value={18}>18px (特大)</option>
               </select>
             </div>
           </div>
@@ -918,6 +959,8 @@ export function App() {
         onClose={() => setIsSettingsOpen(false)}
         currentSettings={settings}
         onSave={updateSettings}
+        fontSize={fontSize}
+        onChangeFontSize={handleSelectFontSize}
       />
     </div>
   );

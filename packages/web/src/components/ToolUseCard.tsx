@@ -84,7 +84,7 @@ export const ToolUseCard: React.FC<ToolUseCardProps> = ({ tool, onApprove, onDen
 
   return (
     <div
-      className={`my-2 rounded-xl border overflow-hidden text-xs w-full transition-all ${
+      className={`my-2 rounded-xl border overflow-hidden text-[0.82em] w-full transition-all ${
         isPendingApproval
           ? 'border-amber-500/80 bg-amber-950/20 shadow-md shadow-amber-950/40'
           : 'border-slate-800/80 bg-slate-900/60 shadow-sm'
@@ -111,21 +111,21 @@ export const ToolUseCard: React.FC<ToolUseCardProps> = ({ tool, onApprove, onDen
               meta.icon
             )}
           </div>
-          <span className={`px-1.5 py-0.5 rounded text-[10.5px] font-mono border shrink-0 ${meta.badgeColor}`}>
+          <span className={`px-1.5 py-0.5 rounded text-[0.7em] font-mono border shrink-0 ${meta.badgeColor}`}>
             {meta.label}
           </span>
-          <span className="font-mono text-slate-300 truncate text-[12px] flex-1">
+          <span className="font-mono text-slate-300 truncate text-[0.8em] flex-1">
             {summaryText}
           </span>
         </div>
 
         <div className="flex items-center space-x-1.5 shrink-0">
           {isPendingApproval ? (
-            <span className="flex items-center text-amber-400 text-[11px] space-x-1 font-semibold px-2 py-0.5 rounded-full bg-amber-950/80 border border-amber-700/80 animate-pulse">
+            <span className="flex items-center text-amber-400 text-[0.75em] space-x-1 font-semibold px-2 py-0.5 rounded-full bg-amber-950/80 border border-amber-700/80 animate-pulse">
               <span>承認待ち</span>
             </span>
           ) : tool.isRunning ? (
-            <span className="flex items-center text-amber-400 text-[11px] space-x-1 font-medium">
+            <span className="flex items-center text-amber-400 text-[0.75em] space-x-1 font-medium">
               <Loader2 className="w-3.5 h-3.5 animate-spin" />
               <span>実行中</span>
             </span>
@@ -145,13 +145,13 @@ export const ToolUseCard: React.FC<ToolUseCardProps> = ({ tool, onApprove, onDen
 
       {/* アコーディオン詳細展開 */}
       {isOpen && (
-        <div className="p-3 border-t border-slate-800/80 bg-slate-950/70 space-y-2.5 text-[11.5px]">
+        <div className="p-3 border-t border-slate-800/80 bg-slate-950/70 space-y-2.5 text-[0.78em]">
           {/* Tool Input */}
           <div>
-            <div className="text-[10px] uppercase font-semibold text-slate-500 mb-1">
+            <div className="text-[0.7em] uppercase font-semibold text-slate-500 mb-1">
               Tool Input:
             </div>
-            <pre className="text-slate-300 font-mono text-[11.5px] p-2.5 rounded-lg bg-slate-900/90 border border-slate-800 overflow-x-auto max-h-48 leading-relaxed">
+            <pre className="text-slate-300 font-mono text-[0.8em] p-2.5 rounded-lg bg-slate-900/90 border border-slate-800 overflow-x-auto max-h-48 leading-relaxed">
               {typeof tool.input === 'string'
                 ? tool.input
                 : JSON.stringify(tool.input, null, 2)}
@@ -161,10 +161,10 @@ export const ToolUseCard: React.FC<ToolUseCardProps> = ({ tool, onApprove, onDen
           {/* Tool Output (あれば) */}
           {tool.output && (
             <div>
-              <div className="text-[10px] uppercase font-semibold text-slate-500 mb-1">
+              <div className="text-[0.7em] uppercase font-semibold text-slate-500 mb-1">
                 Tool Output:
               </div>
-              <pre className="text-slate-300 font-mono text-[11.5px] p-2.5 rounded-lg bg-slate-900/90 border border-slate-800 overflow-x-auto max-h-56 whitespace-pre-wrap break-all leading-relaxed">
+              <pre className="text-slate-300 font-mono text-[0.8em] p-2.5 rounded-lg bg-slate-900/90 border border-slate-800 overflow-x-auto max-h-56 whitespace-pre-wrap break-all leading-relaxed">
                 {tool.output}
               </pre>
             </div>
@@ -175,7 +175,7 @@ export const ToolUseCard: React.FC<ToolUseCardProps> = ({ tool, onApprove, onDen
       {/* 承認要求アクションバー (承認待ち時) */}
       {isPendingApproval && (
         <div className="px-3 py-2.5 bg-amber-950/40 border-t border-amber-900/60 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5 select-none">
-          <div className="flex items-center space-x-1.5 text-amber-300 text-[12px] font-medium">
+          <div className="flex items-center space-x-1.5 text-amber-300 text-[0.8em] font-medium">
             <ShieldAlert className="w-4 h-4 text-amber-400 shrink-0" />
             <span>このツールの実行を許可しますか？</span>
           </div>
@@ -185,7 +185,7 @@ export const ToolUseCard: React.FC<ToolUseCardProps> = ({ tool, onApprove, onDen
                 e.stopPropagation();
                 if (tool.approvalRequestId && onDeny) onDeny(tool.approvalRequestId);
               }}
-              className="flex-1 sm:flex-none px-3.5 py-1.5 rounded-lg bg-rose-950/80 hover:bg-rose-900 text-rose-200 border border-rose-800/80 text-[11.5px] font-medium transition-colors flex items-center justify-center space-x-1 active:scale-95"
+              className="flex-1 sm:flex-none px-3.5 py-1.5 rounded-lg bg-rose-950/80 hover:bg-rose-900 text-rose-200 border border-rose-800/80 text-[0.78em] font-medium transition-colors flex items-center justify-center space-x-1 active:scale-95"
             >
               <X className="w-3.5 h-3.5" />
               <span>拒否 (Deny)</span>
@@ -195,7 +195,7 @@ export const ToolUseCard: React.FC<ToolUseCardProps> = ({ tool, onApprove, onDen
                 e.stopPropagation();
                 if (tool.approvalRequestId && onApprove) onApprove(tool.approvalRequestId);
               }}
-              className="flex-1 sm:flex-none px-4 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-[11.5px] shadow-sm transition-colors flex items-center justify-center space-x-1 active:scale-95"
+              className="flex-1 sm:flex-none px-4 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-[0.78em] shadow-sm transition-colors flex items-center justify-center space-x-1 active:scale-95"
             >
               <Check className="w-3.5 h-3.5" />
               <span>許可する (Allow)</span>
@@ -206,13 +206,13 @@ export const ToolUseCard: React.FC<ToolUseCardProps> = ({ tool, onApprove, onDen
 
       {/* 許可済み / 拒否済みステータスフッター */}
       {tool.approvalState === 'allowed' && (
-        <div className="px-3 py-1 bg-emerald-950/40 border-t border-emerald-900/50 text-[10.5px] text-emerald-400 flex items-center space-x-1">
+        <div className="px-3 py-1 bg-emerald-950/40 border-t border-emerald-900/50 text-[0.7em] text-emerald-400 flex items-center space-x-1">
           <Check className="w-3 h-3" />
           <span>ユーザーにより許可されました</span>
         </div>
       )}
       {tool.approvalState === 'denied' && (
-        <div className="px-3 py-1 bg-rose-950/40 border-t border-rose-900/50 text-[10.5px] text-rose-400 flex items-center space-x-1">
+        <div className="px-3 py-1 bg-rose-950/40 border-t border-rose-900/50 text-[0.7em] text-rose-400 flex items-center space-x-1">
           <X className="w-3 h-3" />
           <span>ユーザーにより拒否されました</span>
         </div>

@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { X, Save, RotateCcw, ShieldCheck, Server, Folder, Radio, RefreshCw, Cpu, Plus, Trash2, ArrowUp } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { X, Save, RotateCcw, ShieldCheck, Server, Folder, Radio, RefreshCw, Cpu, Plus, Trash2, ArrowUp, Type } from 'lucide-react';
 import { getDefaultSettings, SocketSettings, DEFAULT_AVAILABLE_MODELS } from '../hooks/useRemoteSocket';
 import { TransportMode } from '../types/protocol';
 
@@ -8,6 +8,8 @@ interface SettingsModalProps {
   onClose: () => void;
   currentSettings: SocketSettings;
   onSave: (settings: SocketSettings) => void;
+  fontSize?: number;
+  onChangeFontSize?: (size: number) => void;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -15,6 +17,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onClose,
   currentSettings,
   onSave,
+  fontSize = 15,
+  onChangeFontSize,
 }) => {
   const [hubUrl, setHubUrl] = useState(currentSettings.hubUrl);
   const [authToken, setAuthToken] = useState(currentSettings.authToken);
@@ -27,9 +31,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       ? currentSettings.availableModels
       : [...DEFAULT_AVAILABLE_MODELS]
   );
+  const [selectedFontSize, setSelectedFontSize] = useState<number>(fontSize);
   const [newModel, setNewModel] = useState('');
   const [isClearingCache, setIsClearingCache] = useState(false);
   const [clearStatus, setClearStatus] = useState<string | null>(null);
+
+  useEffect(() => {
+    setSelectedFontSize(fontSize);
+  }, [fontSize]);
 
   if (!isOpen) return null;
 
@@ -76,6 +85,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setDefaultCwd(def.defaultCwd);
     setTransportMode(def.transportMode || 'auto');
     setModels([...DEFAULT_AVAILABLE_MODELS]);
+    setSelectedFontSize(15);
+    onChangeFontSize?.(15);
   };
 
   const handleClearCache = async () => {
@@ -282,6 +293,39 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </div>
             <p className="text-[10px] text-slate-500 mt-1">
               チャット画面のプルダウンに反映されます。社内Bedrockで許可されているモデル名を登録してください。
+            </p>
+          </div>
+
+          {/* 表示文字サイズ */}
+          <div>
+            <label className="block text-slate-400 font-medium mb-1.5 flex items-center justify-between">
+              <div className="flex items-center space-x-1">
+                <Type className="w-3.5 h-3.5 text-sky-400" />
+                <span>表示文字サイズ (一括スケーリング)</span>
+              </div>
+              <span className="text-[10px] text-slate-500 font-normal">
+                画面の文字密度を調整
+              </span>
+            </label>
+            <select
+              value={selectedFontSize}
+              onChange={(e) => {
+                const val = Number(e.target.value);
+                setSelectedFontSize(val);
+                onChangeFontSize?.(val);
+              }}
+              className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-100 font-mono outline-none focus:border-sky-500 transition-colors"
+            >
+              <option value={12}>12px (極小 - 画面に最大密度で表示)</option>
+              <option value={13}>13px (小 - 情報量重視)</option>
+              <option value={14}>14px (やや小 - バランス)</option>
+              <option value={15}>15px (標準 / デフォルト)</option>
+              <option value={16}>16px (やや大)</option>
+              <option value={17}>17px (大)</option>
+              <option value={18}>18px (特大 - 視認性重視)</option>
+            </select>
+            <p className="text-[10px] text-slate-500 mt-1">
+              数値を小さくすると画面にたくさんの文字が表示されます。チャット画面下部のプルダウンからも即座に変更可能です。
             </p>
           </div>
 

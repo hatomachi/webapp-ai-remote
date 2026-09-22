@@ -13,12 +13,14 @@ import {
   PermissionMode,
   ToolUseItem,
   ProjectInfo,
+  AIEngine,
 } from './types/protocol';
 
 const SESSIONS_STORAGE_KEY = 'ai_remote_sessions_v1';
 const PROJECTS_STORAGE_KEY = 'ai_remote_projects_v1';
 const MESSAGES_STORAGE_PREFIX = 'ai_remote_msgs_';
 const MODEL_STORAGE_KEY = 'ai_remote_selected_model_v1';
+const ENGINE_STORAGE_KEY = 'ai_remote_selected_engine_v1';
 const FONT_SIZE_STORAGE_KEY = 'ai_remote_font_size_v1';
 const DEFAULT_FONT_SIZE = 15;
 
@@ -75,6 +77,21 @@ export function App() {
 
   const [currentCwd, setCurrentCwd] = useState<string>('');
   const [permissionMode, setPermissionMode] = useState<PermissionMode>('acceptEdits');
+  const [selectedEngine, setSelectedEngine] = useState<AIEngine>(() => {
+    try {
+      const saved = localStorage.getItem(ENGINE_STORAGE_KEY);
+      if (saved === 'copilot' || saved === 'claude') return saved;
+    } catch {}
+    return 'claude';
+  });
+
+  const handleSelectEngine = (engine: AIEngine) => {
+    setSelectedEngine(engine);
+    try {
+      localStorage.setItem(ENGINE_STORAGE_KEY, engine);
+    } catch {}
+  };
+
   const [selectedModel, setSelectedModel] = useState<string>(() => {
     try {
       const saved = localStorage.getItem(MODEL_STORAGE_KEY);
@@ -635,6 +652,7 @@ export function App() {
       content: text,
       timestamp: new Date().toISOString(),
       sessionId: currentSessionId,
+      engine: selectedEngine,
     };
 
     setMessages((prev) => [...prev, userMsg]);
@@ -651,7 +669,8 @@ export function App() {
       isResume,
       currentCwd || currentProject?.path || undefined,
       permissionMode,
-      selectedModel
+      selectedModel,
+      selectedEngine
     );
   };
 
@@ -820,6 +839,21 @@ export function App() {
         {/* 権限モード & モデル選択バー */}
         <div className="flex flex-wrap items-center justify-between text-[11px] text-slate-400 px-1 mb-2 gap-2">
           <div className="flex items-center space-x-3 flex-wrap gap-y-1">
+            {/* AI エンジン選択プルダウン */}
+            <div className="flex items-center space-x-1.5">
+              <Cpu className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+              <span className="shrink-0 text-slate-400">Engine:</span>
+              <select
+                value={selectedEngine}
+                onChange={(e) => handleSelectEngine(e.target.value as AIEngine)}
+                className="bg-slate-800 border border-slate-700 hover:border-emerald-500/60 rounded px-1.5 py-0.5 text-[10px] text-emerald-200 font-medium outline-none transition-colors"
+                title="中継するAIエンジン (Claude Code / GitHub Copilot)"
+              >
+                <option value="claude">Claude Code</option>
+                <option value="copilot">GitHub Copilot</option>
+              </select>
+            </div>
+
             {/* モデル選択プルダウン */}
             <div className="flex items-center space-x-1.5">
               <Bot className="w-3.5 h-3.5 text-purple-400 shrink-0" />

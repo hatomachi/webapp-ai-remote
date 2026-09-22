@@ -416,7 +416,8 @@ export function useRemoteSocket(onMessage: (msg: InboundMessage) => void) {
     isResume?: boolean,
     cwd?: string,
     permissionMode: PermissionMode = 'acceptEdits',
-    model?: string
+    model?: string,
+    engine?: AIEngine
   ) => {
     const payload: SendPromptMessage = {
       type: 'prompt',
@@ -426,6 +427,7 @@ export function useRemoteSocket(onMessage: (msg: InboundMessage) => void) {
       cwd: cwd || settings.defaultCwd || agentCwd || undefined,
       permissionMode,
       model,
+      engine,
     };
     const ok = send(payload);
     if (ok) {

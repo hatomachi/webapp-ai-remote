@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import remarkBreaks from 'remark-breaks';
 import { AlertTriangle, Clock, DollarSign, Zap, Copy, Check } from 'lucide-react';
 import { ChatMessage as ChatMessageType } from '../types/protocol';
 import { ToolUseCard } from './ToolUseCard';
@@ -71,6 +73,7 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
       {(message.content || message.isStreaming) && (
         <div className="w-full text-slate-200">
           <ReactMarkdown
+            remarkPlugins={[remarkGfm, remarkBreaks]}
             components={{
               h1: ({ node, ...props }) => (
                 <h1 className="text-[1.15em] font-bold text-slate-100 mt-3.5 mb-1.5 leading-snug" {...props} />
@@ -93,6 +96,29 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
               li: ({ node, ...props }) => <li className="my-0.5" {...props} />,
               blockquote: ({ node, ...props }) => (
                 <blockquote className="border-l-2 border-slate-600 pl-3 my-2 text-slate-400 italic text-[0.93em]" {...props} />
+              ),
+              table: ({ node, ...props }) => (
+                <div className="overflow-x-auto my-2.5 max-w-full rounded-xl border border-slate-800 bg-slate-950/40 shadow-inner">
+                  <table className="w-full text-left border-collapse" {...props} />
+                </div>
+              ),
+              thead: ({ node, ...props }) => (
+                <thead className="bg-slate-800/80 border-b border-slate-700/80 text-slate-200" {...props} />
+              ),
+              tbody: ({ node, ...props }) => (
+                <tbody className="divide-y divide-slate-800/60" {...props} />
+              ),
+              tr: ({ node, ...props }) => (
+                <tr className="hover:bg-slate-800/30 transition-colors" {...props} />
+              ),
+              th: ({ node, ...props }) => (
+                <th className="px-3 py-2 text-[0.88em] font-semibold text-slate-200 whitespace-nowrap border-r border-slate-800/60 last:border-r-0" {...props} />
+              ),
+              td: ({ node, ...props }) => (
+                <td className="px-3 py-2 text-[0.85em] text-slate-300 leading-relaxed border-r border-slate-800/40 last:border-r-0" {...props} />
+              ),
+              del: ({ node, ...props }) => (
+                <del className="line-through text-slate-500" {...props} />
               ),
               code: ({ node, inline, className, children, ...props }: any) => {
                 if (inline) {

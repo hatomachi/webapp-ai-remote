@@ -8,6 +8,7 @@ export interface SessionInfo {
   title: string;
   cwd: string;
   projectId?: string;
+  engine?: 'claude' | 'copilot';
   createdAt: string;
   updatedAt: string;
   messageCount: number;
@@ -35,6 +36,7 @@ export interface ChatMessage {
   content: string;
   timestamp: string;
   sessionId: string;
+  engine?: 'claude' | 'copilot';
   isStreaming?: boolean;
   isError?: boolean;
   toolUses?: ToolUseItem[];
@@ -403,6 +405,7 @@ export function saveSessionHistory(
     cwd: string;
     projectId?: string;
     title?: string;
+    engine?: 'claude' | 'copilot';
   }
 ) {
   if (!sessionId) return;
@@ -423,6 +426,7 @@ export function saveSessionHistory(
     title: meta.title || existing?.title || defaultTitle,
     cwd: meta.cwd || existing?.cwd || '',
     projectId: meta.projectId || existing?.projectId || (meta.cwd ? path.basename(meta.cwd) : undefined),
+    engine: meta.engine || existing?.engine || 'claude',
     createdAt: existing?.createdAt || new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     messageCount: messages.length,

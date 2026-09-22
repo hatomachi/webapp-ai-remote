@@ -1,4 +1,5 @@
 export type PermissionMode = 'acceptEdits' | 'bypassPermissions' | 'default';
+export type AIEngine = 'claude' | 'copilot';
 
 // --- WebSocket Protocol Messages ---
 
@@ -34,13 +35,14 @@ export interface TurnStartMessage {
   prompt: string;
   sessionId: string;
   cwd: string;
+  engine?: AIEngine;
   timestamp: string;
 }
 
 export interface ClaudeEventMessage {
   type: 'claude_event';
   sessionId: string;
-  event: any; // Raw Claude stream-json event
+  event: any; // Raw Claude stream-json event or normalized engine event
 }
 
 export interface ClaudeRawLogMessage {
@@ -126,6 +128,7 @@ export interface SendPromptMessage {
   cwd?: string;
   permissionMode?: PermissionMode;
   model?: string;
+  engine?: AIEngine;
 }
 
 export interface AbortMessage {
@@ -208,6 +211,7 @@ export interface ChatMessage {
   content: string;
   timestamp: string;
   sessionId: string;
+  engine?: AIEngine;
   isStreaming?: boolean;
   isError?: boolean;
   toolUses?: ToolUseItem[];
@@ -219,6 +223,7 @@ export interface SessionInfo {
   title: string;
   cwd: string;
   projectId?: string;
+  engine?: AIEngine;
   createdAt: string;
   updatedAt: string;
   messageCount: number;

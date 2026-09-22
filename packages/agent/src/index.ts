@@ -12,6 +12,9 @@ import {
   deleteSession,
   ChatMessage,
 } from './sessionManager.js';
+import { CopilotTurnRunner } from './copilotRunner.js';
+
+const copilotRunner = new CopilotTurnRunner();
 
 // .env ファイルの自動読み込み (Node 20+ 標準機能 or 簡易パーサー)
 function loadEnv() {
@@ -331,7 +334,11 @@ async function handleClientMessage(msg: any) {
   console.log('[Agent] Received from Client:', msg.type);
 
   if (msg.type === 'prompt') {
-    executeClaudeTurn(msg);
+    if (msg.engine === 'copilot') {
+      executeCopilotTurn(msg);
+    } else {
+      executeClaudeTurn(msg);
+    }
   } else if (msg.type === 'abort') {
     abortCurrentTurn();
   } else if (msg.type === 'get_status') {
@@ -339,7 +346,7 @@ async function handleClientMessage(msg: any) {
       type: 'agent_status',
       hostname: HOSTNAME,
       cwd: DEFAULT_CWD,
-      isBusy: currentChildProcess !== null,
+      isBusy: currentChildProcess !== null || copilotRunner.isRunning,
       timestamp: new Date().toISOString()
     });
   } else if (msg.type === 'list_projects') {
@@ -417,48 +424,10 @@ function handleToolApprovalResponse(msg: {
 }
 
 /**
- * 現在実行中の Claude プロセスを中断
+ * 作業ディレクトリの検証とOSパス不一致の自動フォールバック
  */
-function abortCurrentTurn() {
-  if (currentChildProcess) {
-    console.log('[Agent] Aborting current Claude process...');
-    currentChildProcess.kill('SIGINT');
-    pendingApprovals.clear();
-    sendToHub({
-      type: 'execution_aborted',
-      timestamp: new Date().toISOString()
-    });
-  }
-}
-
-/**
- * Claude Code の 1 ターンを実行
- */
-async function executeClaudeTurn(params: {
-  text: string;
-  sessionId?: string;
-  isResume?: boolean;
-  cwd?: string;
-  permissionMode?: string;
-  model?: string;
-}) {
-  if (currentChildProcess) {
-    sendToHub({
-      type: 'error',
-      message: 'Claude Code is already running a task. Please wait or abort.',
-      code: 'BUSY'
-    });
-    return;
-  }
-
-  const prompt = params.text;
-  const activeSessionId = params.sessionId || randomUUID();
-  // isResume が明示されていなければ knownSessions にあるか判定（未記録なら初回なので false）
-  const initialResume = params.isResume !== undefined
-    ? params.isResume
-    : Boolean(params.sessionId && knownSessions.has(params.sessionId));
-  // 作業ディレクトリの検証とOSパス不一致の自動フォールバック
-  let workDir = params.cwd || DEFAULT_CWD;
+function validateWorkDir(rawCwd?: string): string {
+  let workDir = rawCwd || DEFAULT_CWD;
   const isWindowsPath = /^[a-zA-Z]:[\\/]/.test(workDir);
   const isUnixPath = workDir.startsWith('/');
 
@@ -476,6 +445,100 @@ async function executeClaudeTurn(params: {
     console.warn(`[Agent] ➡️ 安全のため、エージェントのデフォルト作業ディレクトリ '${DEFAULT_CWD}' に自動フォールバックします。`);
     workDir = DEFAULT_CWD;
   }
+  return workDir;
+}
+
+/**
+ * 現在実行中の AI プロセス (Claude / Copilot) を中断
+ */
+function abortCurrentTurn() {
+  if (currentChildProcess) {
+    console.log('[Agent] Aborting current Claude process...');
+    currentChildProcess.kill('SIGINT');
+    pendingApprovals.clear();
+    sendToHub({
+      type: 'execution_aborted',
+      timestamp: new Date().toISOString()
+    });
+  } else if (copilotRunner.isRunning) {
+    console.log('[Agent] Aborting current Copilot process...');
+    copilotRunner.abort();
+    sendToHub({
+      type: 'execution_aborted',
+      timestamp: new Date().toISOString()
+    });
+  }
+}
+
+/**
+ * GitHub Copilot CLI の 1 ターンを実行
+ */
+async function executeCopilotTurn(params: {
+  text: string;
+  sessionId?: string;
+  isResume?: boolean;
+  cwd?: string;
+  model?: string;
+}) {
+  if (currentChildProcess || copilotRunner.isRunning) {
+    sendToHub({
+      type: 'error',
+      message: 'AI agent is already running a task. Please wait or abort.',
+      code: 'BUSY'
+    });
+    return;
+  }
+
+  const prompt = params.text;
+  const activeSessionId = params.sessionId || randomUUID();
+  const initialResume = params.isResume !== undefined
+    ? params.isResume
+    : Boolean(params.sessionId && knownSessions.has(params.sessionId));
+  const workDir = validateWorkDir(params.cwd);
+
+  knownSessions.add(activeSessionId);
+
+  await copilotRunner.execute({
+    prompt,
+    sessionId: activeSessionId,
+    isResume: initialResume,
+    workDir,
+    model: params.model,
+    onSendToHub: (msg) => sendToHub(msg),
+    onTurnEnd: () => {
+      // 完了通知等の追加処理があればここに記述
+    }
+  });
+}
+
+/**
+ * Claude Code の 1 ターンを実行
+ */
+async function executeClaudeTurn(params: {
+  text: string;
+  sessionId?: string;
+  isResume?: boolean;
+  cwd?: string;
+  permissionMode?: string;
+  model?: string;
+}) {
+  if (currentChildProcess || copilotRunner.isRunning) {
+    sendToHub({
+      type: 'error',
+      message: 'AI agent is already running a task. Please wait or abort.',
+      code: 'BUSY'
+    });
+    return;
+  }
+
+  const prompt = params.text;
+  const activeSessionId = params.sessionId || randomUUID();
+  // isResume が明示されていなければ knownSessions にあるか判定（未記録なら初回なので false）
+  const initialResume = params.isResume !== undefined
+    ? params.isResume
+    : Boolean(params.sessionId && knownSessions.has(params.sessionId));
+  // 作業ディレクトリの検証とOSパス不一致の自動フォールバック
+  const workDir = validateWorkDir(params.cwd);
 
   const permissionMode = params.permissionMode || 'acceptEdits';
 

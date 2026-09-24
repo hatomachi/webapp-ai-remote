@@ -99,6 +99,7 @@ export interface ExecuteCopilotParams {
   sessionId: string;
   isResume: boolean;
   workDir: string;
+  permissionMode?: string;
   model?: string;
   reasoningEffort?: string;
   onSendToHub: (msg: any) => void;
@@ -128,7 +129,7 @@ export class CopilotTurnRunner {
   }
 
   public async execute(params: ExecuteCopilotParams): Promise<void> {
-    const { prompt, sessionId, isResume, workDir, model, onSendToHub, onTurnEnd } = params;
+    const { prompt, sessionId, isResume, workDir, permissionMode, model, onSendToHub, onTurnEnd } = params;
 
     // Copilot CLI は正規の UUID v4 形式を厳格に要求するため、不正形式の場合は自動生成
     const effectiveSessionId = UUID_REGEX.test(sessionId) ? sessionId : randomUUID();
@@ -136,22 +137,32 @@ export class CopilotTurnRunner {
       console.log(`[CopilotRunner] Replaced non-UUID sessionId '${sessionId}' with '${effectiveSessionId}'`);
     }
 
+    const effectivePermissionMode = permissionMode || 'acceptEdits';
+
     const args: string[] = [
       '-p', prompt,
       '--output-format', 'json',
-      '--stream', 'on',
-      '--allow-all-tools' // 非対話モードでの安全なツール自動実行
+      '--stream', 'on'
     ];
+
+    if (effectivePermissionMode === 'bypassPermissions') {
+      // bypassPermissions: ツール実行、ファイルパス制限、URLアクセスの全権限を自動承認
+      args.push('--allow-all');
+    } else {
+      // acceptEdits / default: 非対話モードでの安全なツール自動実行
+      args.push('--allow-all-tools');
+    }
 
     if (model && model.trim()) {
       args.push('--model', model.trim());
     }
 
-    // --reasoning-effort の付与（パラメータ指定 > 環境変数 COPILOT_REASONING_EFFORT > デフォルト 'high'）
+    // --reasoning-effort の付与（パラメータ指定 > 環境変数 COPILOT_REASONING_EFFORT > 対応モデル時デフォルト 'high'）
+    // ※ model が未指定または 'auto' の場合、Copilot CLI が "Model 'auto' does not support reasoning effort configuration" で拒否するため付与しない
+    const explicitReasoning = params.reasoningEffort || getEnvCaseInsensitive('COPILOT_REASONING_EFFORT', 'copilot_reasoning_effort');
     const reasoningEffort = (
-      params.reasoningEffort ||
-      getEnvCaseInsensitive('COPILOT_REASONING_EFFORT', 'copilot_reasoning_effort') ||
-      'high'
+      explicitReasoning ||
+      (model && model.trim() && model.trim().toLowerCase() !== 'auto' ? 'high' : '')
     ).trim();
 
     if (reasoningEffort && reasoningEffort.toLowerCase() !== 'off' && reasoningEffort.toLowerCase() !== 'none') {
@@ -166,6 +177,7 @@ export class CopilotTurnRunner {
 
     console.log(`[CopilotRunner] Launching Copilot: ${this.copilotBin} ${args.join(' ')}`);
     console.log(`[CopilotRunner] Session ID: ${effectiveSessionId} (isResume: ${isResume})`);
+    console.log(`[CopilotRunner] Permission: ${effectivePermissionMode} (${effectivePermissionMode === 'bypassPermissions' ? '--allow-all' : '--allow-all-tools'})`);
     if (model) {
       console.log(`[CopilotRunner] Model     : ${model.trim()}`);
     }
@@ -218,12 +230,17 @@ export class CopilotTurnRunner {
       existingMessages = await getSessionMessages(effectiveSessionId, workDir);
     } catch {}
 
+    const childEnv: NodeJS.ProcessEnv = {
+      ...process.env,
+      FORCE_COLOR: '0'
+    };
+    if (effectivePermissionMode === 'bypassPermissions') {
+      childEnv.COPILOT_ALLOW_ALL = 'true';
+    }
+
     const child = spawn(this.copilotBin, args, {
       cwd: workDir,
-      env: {
-        ...process.env,
-        FORCE_COLOR: '0'
-      },
+      env: childEnv,
       stdio: ['pipe', 'pipe', 'pipe'],
       shell: isWindows
     });

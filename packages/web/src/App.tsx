@@ -21,6 +21,7 @@ const PROJECTS_STORAGE_KEY = 'ai_remote_projects_v1';
 const MESSAGES_STORAGE_PREFIX = 'ai_remote_msgs_';
 const MODEL_STORAGE_KEY = 'ai_remote_selected_model_v1';
 const ENGINE_STORAGE_KEY = 'ai_remote_selected_engine_v1';
+const PERMISSION_MODE_STORAGE_KEY = 'ai_remote_permission_mode_v1';
 const FONT_SIZE_STORAGE_KEY = 'ai_remote_font_size_v1';
 const DEFAULT_FONT_SIZE = 15;
 
@@ -76,7 +77,22 @@ export function App() {
   });
 
   const [currentCwd, setCurrentCwd] = useState<string>('');
-  const [permissionMode, setPermissionMode] = useState<PermissionMode>('acceptEdits');
+  const [permissionMode, setPermissionMode] = useState<PermissionMode>(() => {
+    try {
+      const saved = localStorage.getItem(PERMISSION_MODE_STORAGE_KEY);
+      if (saved === 'bypassPermissions' || saved === 'acceptEdits' || saved === 'default') {
+        return saved as PermissionMode;
+      }
+    } catch {}
+    return 'acceptEdits';
+  });
+
+  const handleSelectPermissionMode = (mode: PermissionMode) => {
+    setPermissionMode(mode);
+    try {
+      localStorage.setItem(PERMISSION_MODE_STORAGE_KEY, mode);
+    } catch {}
+  };
   const [selectedEngine, setSelectedEngine] = useState<AIEngine>(() => {
     try {
       const saved = localStorage.getItem(ENGINE_STORAGE_KEY);
@@ -883,7 +899,7 @@ export function App() {
               <span className="shrink-0 text-slate-400">Mode:</span>
               <select
                 value={permissionMode}
-                onChange={(e) => setPermissionMode(e.target.value as PermissionMode)}
+                onChange={(e) => handleSelectPermissionMode(e.target.value as PermissionMode)}
                 className="bg-slate-800 border border-slate-700 hover:border-sky-500/60 rounded px-1.5 py-0.5 text-[10px] text-slate-200 outline-none transition-colors"
               >
                 <option value="acceptEdits">acceptEdits (編集自動承認)</option>

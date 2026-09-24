@@ -478,6 +478,7 @@ async function executeCopilotTurn(params: {
   sessionId?: string;
   isResume?: boolean;
   cwd?: string;
+  permissionMode?: string;
   model?: string;
   reasoningEffort?: string;
 }) {
@@ -504,6 +505,7 @@ async function executeCopilotTurn(params: {
     sessionId: activeSessionId,
     isResume: initialResume,
     workDir,
+    permissionMode: params.permissionMode,
     model: params.model,
     reasoningEffort: params.reasoningEffort,
     onSendToHub: (msg) => sendToHub(msg),

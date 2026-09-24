@@ -46,6 +46,7 @@ export interface ChatMessage {
 const STORAGE_DIR = path.join(os.homedir(), '.ai-remote', 'sessions');
 const INDEX_FILE = path.join(STORAGE_DIR, 'index.json');
 const CLAUDE_PROJECTS_DIR = path.join(os.homedir(), '.claude', 'projects');
+const COPILOT_SESSION_STATE_DIR = path.join(os.homedir(), '.copilot', 'session-state');
 
 /**
  * 保存先ディレクトリを初期化
@@ -68,6 +69,9 @@ function loadInternalIndex(): Map<string, SessionInfo> {
       if (Array.isArray(data)) {
         for (const item of data) {
           if (item && item.id) {
+            if (!item.engine) {
+              item.engine = 'claude';
+            }
             map.set(item.id, item);
           }
         }
@@ -138,6 +142,7 @@ async function scanClaudeProjects(targetCwd?: string): Promise<SessionInfo[]> {
             title: summary.title || '無題のセッション',
             cwd: targetCwd || summary.cwd || '',
             projectId: summary.cwd ? path.basename(summary.cwd) : undefined,
+            engine: 'claude',
             createdAt: stats.birthtime.toISOString() || stats.mtime.toISOString(),
             updatedAt: stats.mtime.toISOString(),
             messageCount: summary.messageCount,
@@ -316,16 +321,230 @@ export async function parseClaudeJsonlToMessages(filePath: string, sessionId: st
 }
 
 /**
+ * Copilot の workspace.yaml を簡易パース
+ */
+function parseWorkspaceYaml(content: string): {
+  id?: string;
+  cwd?: string;
+  createdAt?: string;
+  updatedAt?: string;
+} {
+  const result: { id?: string; cwd?: string; createdAt?: string; updatedAt?: string } = {};
+  for (const line of content.split('\n')) {
+    const match = line.match(/^([a-zA-Z0-9_-]+):\s*(.*)$/);
+    if (match) {
+      const key = match[1];
+      const val = match[2].trim().replace(/^['"]|['"]$/g, '');
+      if (key === 'id') result.id = val;
+      else if (key === 'cwd') result.cwd = val;
+      else if (key === 'created_at') result.createdAt = val;
+      else if (key === 'updated_at') result.updatedAt = val;
+    }
+  }
+  return result;
+}
+
+/**
+ * Copilot の events.jsonl からタイトルとメッセージ数を抽出
+ */
+async function extractSummaryFromCopilotEventsJsonl(filePath: string): Promise<{
+  title?: string;
+  messageCount: number;
+}> {
+  if (!fs.existsSync(filePath)) {
+    return { messageCount: 0 };
+  }
+  const fileStream = fs.createReadStream(filePath, { encoding: 'utf-8' });
+  const rl = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
+
+  let firstUserPrompt: string | undefined;
+  let messageCount = 0;
+
+  for await (const line of rl) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    try {
+      const obj = JSON.parse(trimmed);
+      if (obj.type === 'user.message' && obj.data?.content) {
+        messageCount++;
+        if (!firstUserPrompt) {
+          firstUserPrompt =
+            typeof obj.data.content === 'string' ? obj.data.content : String(obj.data.content);
+        }
+      } else if (obj.type === 'assistant.message' && obj.data?.content) {
+        messageCount++;
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  return {
+    title: firstUserPrompt ? firstUserPrompt.slice(0, 30) : undefined,
+    messageCount,
+  };
+}
+
+/**
+ * Copilot CLI の session-state ディレクトリを探索し、指定 cwd（または全プロジェクト）のセッション一覧を抽出
+ */
+async function scanCopilotProjects(targetCwd?: string): Promise<SessionInfo[]> {
+  const result: SessionInfo[] = [];
+  if (!fs.existsSync(COPILOT_SESSION_STATE_DIR)) {
+    return result;
+  }
+
+  try {
+    const entries = fs.readdirSync(COPILOT_SESSION_STATE_DIR, { withFileTypes: true });
+
+    for (const entry of entries) {
+      if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
+
+      const sessionDir = path.join(COPILOT_SESSION_STATE_DIR, entry.name);
+      const yamlPath = path.join(sessionDir, 'workspace.yaml');
+      if (!fs.existsSync(yamlPath)) continue;
+
+      try {
+        const yamlContent = fs.readFileSync(yamlPath, 'utf-8');
+        const ws = parseWorkspaceYaml(yamlContent);
+        const sessionCwd = ws.cwd || '';
+
+        // targetCwd による絞り込み
+        if (targetCwd && sessionCwd !== targetCwd && !sessionCwd.endsWith(path.basename(targetCwd))) {
+          continue;
+        }
+
+        const eventsPath = path.join(sessionDir, 'events.jsonl');
+        const summary = await extractSummaryFromCopilotEventsJsonl(eventsPath);
+
+        // 発言が 0 件の空セッションはスキップ
+        if (summary.messageCount === 0 && !fs.existsSync(eventsPath)) {
+          continue;
+        }
+
+        const stats = fs.statSync(yamlPath);
+        result.push({
+          id: ws.id || entry.name,
+          title: summary.title || '無題のセッション (Copilot)',
+          cwd: sessionCwd || targetCwd || '',
+          projectId: sessionCwd ? path.basename(sessionCwd) : undefined,
+          engine: 'copilot',
+          createdAt: ws.createdAt || stats.birthtime.toISOString() || stats.mtime.toISOString(),
+          updatedAt: ws.updatedAt || stats.mtime.toISOString(),
+          messageCount: summary.messageCount,
+        });
+      } catch {
+        // ignore error for single session directory
+      }
+    }
+  } catch (err: any) {
+    console.warn('[SessionManager] Failed to scan Copilot projects:', err.message);
+  }
+
+  return result;
+}
+
+/**
+ * Copilot の events.jsonl ファイルをパースして ChatMessage[] に変換
+ */
+export async function parseCopilotEventsJsonlToMessages(
+  filePath: string,
+  sessionId: string
+): Promise<ChatMessage[]> {
+  const messages: ChatMessage[] = [];
+  if (!fs.existsSync(filePath)) return messages;
+
+  const fileStream = fs.createReadStream(filePath, { encoding: 'utf-8' });
+  const rl = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
+
+  const currentTools = new Map<string, ToolUseItem>();
+
+  for await (const line of rl) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    try {
+      const obj = JSON.parse(trimmed);
+
+      // 1) ユーザー発言
+      if (obj.type === 'user.message' && obj.data?.content) {
+        messages.push({
+          id: obj.id || `user-${Date.now()}-${Math.random()}`,
+          role: 'user',
+          content: typeof obj.data.content === 'string' ? obj.data.content : JSON.stringify(obj.data.content),
+          timestamp: obj.timestamp || new Date().toISOString(),
+          sessionId,
+          engine: 'copilot',
+        });
+      }
+      // 2) ツール実行開始
+      else if (obj.type === 'tool.execution_start' && obj.data?.toolCallId) {
+        currentTools.set(obj.data.toolCallId, {
+          id: obj.data.toolCallId,
+          name: obj.data.toolName || 'tool',
+          input: obj.data.arguments || {},
+          isRunning: true,
+        });
+      }
+      // 3) ツール実行完了
+      else if (obj.type === 'tool.execution_complete' && obj.data?.toolCallId) {
+        const existing: ToolUseItem = currentTools.get(obj.data.toolCallId) || {
+          id: obj.data.toolCallId,
+          name: obj.data.toolName || 'tool',
+          input: {},
+          isRunning: false,
+        };
+        const resContent =
+          obj.data.result?.content !== undefined ? obj.data.result.content : obj.data.result;
+        existing.output =
+          typeof resContent === 'string' ? resContent : JSON.stringify(resContent);
+        existing.isRunning = false;
+        existing.isError = obj.data.success === false;
+        currentTools.set(obj.data.toolCallId, existing);
+      }
+      // 4) アシスタント発言
+      else if (obj.type === 'assistant.message') {
+        const content = obj.data?.content || '';
+        const toolUses = Array.from(currentTools.values());
+
+        if (content || toolUses.length > 0) {
+          messages.push({
+            id: obj.id || obj.data?.messageId || `asst-${Date.now()}-${Math.random()}`,
+            role: 'assistant',
+            content,
+            timestamp: obj.timestamp || new Date().toISOString(),
+            sessionId,
+            engine: 'copilot',
+            toolUses: toolUses.length > 0 ? toolUses : undefined,
+          });
+          currentTools.clear();
+        }
+      }
+    } catch {
+      // ignore malformed lines
+    }
+  }
+
+  return messages;
+}
+
+/**
  * 統合セッション一覧を取得
  */
 export async function listSessions(projectId?: string, cwd?: string): Promise<SessionInfo[]> {
   const internalMap = loadInternalIndex();
   const claudeSessions = await scanClaudeProjects(cwd);
+  const copilotSessions = await scanCopilotProjects(cwd);
 
-  // マージ: internalMap を優先し、Claude Code 由来で未登録のものを追加
+  // マージ: internalMap を優先し、Claude Code / Copilot 由来で未登録のものを追加
   for (const cs of claudeSessions) {
     if (!internalMap.has(cs.id)) {
       internalMap.set(cs.id, cs);
+    }
+  }
+
+  for (const cps of copilotSessions) {
+    if (!internalMap.has(cps.id)) {
+      internalMap.set(cps.id, cps);
     }
   }
 
@@ -389,6 +608,26 @@ export async function getSessionMessages(sessionId: string, cwd?: string): Promi
       }
     } catch (err: any) {
       console.warn(`[SessionManager] Failed to find Claude JSONL for ${sessionId}:`, err.message);
+    }
+  }
+
+  // 3) Copilot CLI の events.jsonl を探してパース
+  if (fs.existsSync(COPILOT_SESSION_STATE_DIR)) {
+    try {
+      const copilotSessionDir = path.join(COPILOT_SESSION_STATE_DIR, sessionId);
+      const eventsJsonlPath = path.join(copilotSessionDir, 'events.jsonl');
+      if (fs.existsSync(eventsJsonlPath)) {
+        const parsed = await parseCopilotEventsJsonlToMessages(eventsJsonlPath, sessionId);
+        if (parsed.length > 0) {
+          // 次回用に内部ストアにもキャッシュ保存
+          try {
+            fs.writeFileSync(sessionFilePath, JSON.stringify(parsed, null, 2), 'utf-8');
+          } catch {}
+          return parsed;
+        }
+      }
+    } catch (err: any) {
+      console.warn(`[SessionManager] Failed to find Copilot events.jsonl for ${sessionId}:`, err.message);
     }
   }
 

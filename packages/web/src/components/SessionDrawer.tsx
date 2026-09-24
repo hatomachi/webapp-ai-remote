@@ -26,7 +26,7 @@ interface SessionDrawerProps {
   onRequestScanProjects: () => void;
   sessions: SessionInfo[];
   currentSessionId: string;
-  onSelectSession: (sessionId: string) => void;
+  onSelectSession: (sessionId: string, engine?: 'claude' | 'copilot') => void;
   onNewSession: () => void;
   onDeleteSession: (sessionId: string) => void;
   onRefreshSessions?: () => void;
@@ -55,13 +55,23 @@ export const SessionDrawer: React.FC<SessionDrawerProps> = ({
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [customPath, setCustomPath] = useState('');
   const [customName, setCustomName] = useState('');
+  const [engineFilter, setEngineFilter] = useState<'all' | 'claude' | 'copilot'>('all');
 
   if (!isOpen) return null;
 
   // カレントプロジェクトに紐づくセッションを抽出
-  const filteredSessions = sessions.filter((s) => {
+  const projectSessions = sessions.filter((s) => {
     if (!currentProject) return true;
     return s.projectId === currentProject.id || s.cwd === currentProject.path;
+  });
+
+  const claudeCount = projectSessions.filter((s) => (s.engine || 'claude') === 'claude').length;
+  const copilotCount = projectSessions.filter((s) => s.engine === 'copilot').length;
+
+  const filteredSessions = projectSessions.filter((s) => {
+    if (engineFilter === 'all') return true;
+    const engine = s.engine || 'claude';
+    return engine === engineFilter;
   });
 
   const handleSelectFromCandidate = (candidate: ProjectInfo) => {
@@ -204,6 +214,40 @@ export const SessionDrawer: React.FC<SessionDrawerProps> = ({
             )}
           </div>
 
+          {/* エンジン別セグメントフィルター */}
+          <div className="flex bg-slate-950 p-0.5 rounded-lg border border-slate-800 text-[10px]">
+            <button
+              onClick={() => setEngineFilter('all')}
+              className={`flex-1 py-1 rounded-md transition-all font-medium ${
+                engineFilter === 'all'
+                  ? 'bg-slate-800 text-white shadow-sm'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              すべて ({projectSessions.length})
+            </button>
+            <button
+              onClick={() => setEngineFilter('claude')}
+              className={`flex-1 py-1 rounded-md transition-all font-medium ${
+                engineFilter === 'claude'
+                  ? 'bg-amber-950/80 text-amber-200 border border-amber-600/40 shadow-sm'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              Claude ({claudeCount})
+            </button>
+            <button
+              onClick={() => setEngineFilter('copilot')}
+              className={`flex-1 py-1 rounded-md transition-all font-medium ${
+                engineFilter === 'copilot'
+                  ? 'bg-emerald-950/80 text-emerald-200 border border-emerald-600/40 shadow-sm'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              Copilot ({copilotCount})
+            </button>
+          </div>
+
           {filteredSessions.length === 0 ? (
             <div className="text-center py-8 text-xs text-slate-500">
               このプロジェクトのセッションはありません
@@ -211,6 +255,7 @@ export const SessionDrawer: React.FC<SessionDrawerProps> = ({
           ) : (
             filteredSessions.map((session) => {
               const isActive = session.id === currentSessionId;
+              const engine = session.engine || 'claude';
               const dateStr = new Date(session.updatedAt).toLocaleDateString([], {
                 month: 'short',
                 day: 'numeric',
@@ -222,7 +267,7 @@ export const SessionDrawer: React.FC<SessionDrawerProps> = ({
                 <div
                   key={session.id}
                   onClick={() => {
-                    onSelectSession(session.id);
+                    onSelectSession(session.id, engine);
                     onClose();
                   }}
                   className={`group flex items-center justify-between p-2.5 rounded-xl border transition-all cursor-pointer ${
@@ -234,9 +279,18 @@ export const SessionDrawer: React.FC<SessionDrawerProps> = ({
                   <div className="min-w-0 flex-1 mr-2">
                     <div className="flex items-center space-x-1.5">
                       {isActive && <Check className="w-3.5 h-3.5 text-indigo-400 shrink-0" />}
-                      <span className="text-xs font-medium truncate">
+                      <span className="text-xs font-medium truncate flex-1">
                         {session.title || '無題のセッション'}
                       </span>
+                      {engine === 'copilot' ? (
+                        <span className="shrink-0 px-1.5 py-0.5 rounded text-[9px] font-semibold bg-emerald-950/80 text-emerald-300 border border-emerald-500/30">
+                          Copilot
+                        </span>
+                      ) : (
+                        <span className="shrink-0 px-1.5 py-0.5 rounded text-[9px] font-semibold bg-amber-950/80 text-amber-300 border border-amber-500/30">
+                          Claude
+                        </span>
+                      )}
                     </div>
 
                     <div className="flex items-center space-x-2 text-[10px] text-slate-400 mt-1">

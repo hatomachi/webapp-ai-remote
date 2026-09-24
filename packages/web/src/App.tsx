@@ -165,6 +165,7 @@ export function App() {
               ? {
                   ...s,
                   title: s.title || title,
+                  engine: s.engine || selectedEngine,
                   updatedAt: new Date().toISOString(),
                   messageCount: messages.length,
                 }
@@ -177,6 +178,7 @@ export function App() {
               title,
               cwd: currentProject?.path || currentCwd,
               projectId: currentProject?.id || (currentCwd ? currentCwd.split('/').filter(Boolean).pop() : undefined),
+              engine: selectedEngine,
               createdAt: new Date().toISOString(),
               updatedAt: new Date().toISOString(),
               messageCount: messages.length,
@@ -190,7 +192,7 @@ export function App() {
     } catch (e) {
       console.error('Failed to save session messages', e);
     }
-  }, [messages, currentSessionId, currentCwd, currentProject]);
+  }, [messages, currentSessionId, currentCwd, currentProject, selectedEngine]);
 
   // --- 受信イベントのディスパッチ処理 ---
   const handleInboundMessage = useCallback(
@@ -976,7 +978,13 @@ export function App() {
         onRequestScanProjects={requestProjects}
         sessions={sessions}
         currentSessionId={currentSessionId}
-        onSelectSession={(id) => setCurrentSessionId(id)}
+        onSelectSession={(id, engine) => {
+          setCurrentSessionId(id);
+          if (engine) {
+            setSelectedEngine(engine);
+            localStorage.setItem('ai_remote_selected_engine', engine);
+          }
+        }}
         onNewSession={() => handleNewSession()}
         onDeleteSession={handleDeleteSession}
         onRefreshSessions={() => {

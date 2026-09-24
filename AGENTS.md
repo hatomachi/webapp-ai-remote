@@ -39,3 +39,17 @@
 - `packages/agent`: 社内PC常駐ブリッジ（Node.js / Claude Code SDK or CLI runner）
 - `packages/hub`: 社内AWS EC2中継サーバ（軽量WebSocketリレー、Nginx裏）
 - `packages/web`: 会社スマホ向けPWA（Vite + React + Tailwind + PWA、Edge最適化UI）
+
+---
+
+## 4. 🌐 共通AIゲートウェイとしての位置づけ（外部PWA連携・超重要）
+
+本プロジェクト（Hub + Agent）は、`webapp-ai-remote` 単体の開発コックピットであると同時に、**「社内PC上のAI実行基盤（Claude Code / Copilot CLI）と社外スマホを結ぶ、個人開発アプリ共通のプライベートAIゲートウェイ」** です。
+
+- **連携するクライアント例**:
+  - `webapp-mattermost-log`: Mattermost ログ閲覧 PWA からの会話ログ要約・TODO抽出・返信ドラフト生成
+  - `webapp-obsidian`（予定）: モバイル Obsidian からのデイリーノート整理・思考壁打ち
+- **プロトコル互換性の維持**:
+  - 外部クライアントは Hub の `/ws/client`（WebSocket）または `/events` + `/message`（HTTP SSE/POST）を通じて Agent と通信します。
+  - `SendPromptMessage` (`{ type: 'prompt', text, sessionId?, model?, engine? }`) や、`turn_start`, `claude_event`, `turn_end` 等の基本通信仕様は外部アプリとの共通規格（契約）です。Hub/Agent の改修時はこれら下位互換性を破壊しないよう細心の注意を払ってください。
+

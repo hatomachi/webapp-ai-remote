@@ -7,6 +7,7 @@ import {
   ProjectInfo,
   TransportMode,
   ActiveTransport,
+  AIEngine,
 } from '../types/protocol';
 
 export const DEFAULT_AVAILABLE_MODELS = [
@@ -136,6 +137,20 @@ export function saveSettingsToStorage(settings: SocketSettings) {
   localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
 }
 
+// 指数バックオフ設定定数
+const RECONNECT_BASE_DELAY_MS = 2000;    // 最低待機時間: 2000ms（即時再接続禁止）
+const RECONNECT_MAX_DELAY_MS = 30000;    // 最大待機時間: 30秒
+const RECONNECT_BACKOFF_FACTOR = 1.5;    // 指数倍率: 1.5x
+const RECONNECT_JITTER_RATIO = 0.2;      // ジッター: ±20%
+const STATUS_REQUEST_THROTTLE_MS = 2000; // get_status 送信スロットル: 最低2秒
+
+function calculateBackoffDelay(retryCount: number): number {
+  const exponential = RECONNECT_BASE_DELAY_MS * Math.pow(RECONNECT_BACKOFF_FACTOR, retryCount);
+  const capped = Math.min(exponential, RECONNECT_MAX_DELAY_MS);
+  const jitter = capped * RECONNECT_JITTER_RATIO * (Math.random() * 2 - 1);
+  return Math.max(RECONNECT_BASE_DELAY_MS, Math.round(capped + jitter));
+}
+
 export function useRemoteSocket(onMessage: (msg: InboundMessage) => void) {
   const [settings, setSettings] = useState<SocketSettings>(loadSettings);
   const [isHubConnected, setIsHubConnected] = useState<boolean>(false);
@@ -149,8 +164,15 @@ export function useRemoteSocket(onMessage: (msg: InboundMessage) => void) {
 
   const wsRef = useRef<WebSocket | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
-  const reconnectTimerRef = useRef<any>(null);
-  const fallbackTimerRef = useRef<any>(null);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const fallbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const resetRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const retryCountRef = useRef(0);
+  const lastStatusSentTimeRef = useRef(0);
+
+  const settingsRef = useRef(settings);
+  settingsRef.current = settings;
+
   const onMessageRef = useRef(onMessage);
   onMessageRef.current = onMessage;
 
@@ -205,7 +227,7 @@ export function useRemoteSocket(onMessage: (msg: InboundMessage) => void) {
     }
   }, []);
 
-  // 接続クリーンアップ
+  // 接続クリーンアップ（すべてのハンドラをnull化して安全に破棄）
   const cleanupConnections = useCallback(() => {
     if (reconnectTimerRef.current) {
       clearTimeout(reconnectTimerRef.current);
@@ -215,23 +237,89 @@ export function useRemoteSocket(onMessage: (msg: InboundMessage) => void) {
       clearTimeout(fallbackTimerRef.current);
       fallbackTimerRef.current = null;
     }
+    if (resetRetryTimerRef.current) {
+      clearTimeout(resetRetryTimerRef.current);
+      resetRetryTimerRef.current = null;
+    }
     if (wsRef.current) {
+      wsRef.current.onopen = null;
+      wsRef.current.onmessage = null;
       wsRef.current.onclose = null;
       wsRef.current.onerror = null;
-      wsRef.current.close();
+      try {
+        wsRef.current.close();
+      } catch {
+        // ignore
+      }
       wsRef.current = null;
     }
     if (eventSourceRef.current) {
+      eventSourceRef.current.onopen = null;
+      eventSourceRef.current.onmessage = null;
       eventSourceRef.current.onerror = null;
-      eventSourceRef.current.close();
+      try {
+        eventSourceRef.current.close();
+      } catch {
+        // ignore
+      }
       eventSourceRef.current = null;
     }
+    setActiveTransport('none');
   }, []);
 
-  // HTTP (SSE + POST) 接続
+  // 接続安定化ハンドラ: 5秒継続でリトライカウントをリセット
+  const onConnectionEstablished = useCallback((transport: ActiveTransport) => {
+    setIsHubConnected(true);
+    setActiveTransport(transport);
+
+    if (resetRetryTimerRef.current) {
+      clearTimeout(resetRetryTimerRef.current);
+    }
+    resetRetryTimerRef.current = setTimeout(() => {
+      resetRetryTimerRef.current = null;
+      retryCountRef.current = 0;
+      console.log('[RemoteSocket] Connection stable for 5s. Reset retry counter.');
+    }, 5000);
+  }, []);
+
+  // 前方参照用 Ref
+  const connectHttpRef = useRef<() => void>(() => {});
+  const connectWsRef = useRef<() => void>(() => {});
+
+  // 指数バックオフ + Jitter による再接続スケジューリング（即時再接続禁止）
+  const scheduleReconnect = useCallback((targetMode?: 'ws' | 'http') => {
+    if (reconnectTimerRef.current) {
+      clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
+
+    const currentRetry = retryCountRef.current;
+    const delay = calculateBackoffDelay(currentRetry);
+    retryCountRef.current = currentRetry + 1;
+
+    console.log(`[RemoteSocket] Scheduling reconnect in ${delay}ms (attempt #${currentRetry + 1})`);
+
+    reconnectTimerRef.current = setTimeout(() => {
+      reconnectTimerRef.current = null;
+      if (targetMode === 'http') {
+        connectHttpRef.current();
+      } else if (targetMode === 'ws') {
+        connectWsRef.current();
+      } else {
+        const mode = settingsRef.current.transportMode || 'auto';
+        if (mode === 'http') {
+          connectHttpRef.current();
+        } else {
+          connectWsRef.current();
+        }
+      }
+    }, delay);
+  }, []);
+
+  // HTTP (SSE + POST) 接続（SSEは厳密に1本のみ保持）
   const connectHttp = useCallback(() => {
     cleanupConnections();
-    const { hubUrl, authToken } = settings;
+    const { hubUrl, authToken } = settingsRef.current;
     if (!hubUrl) return;
 
     const { eventsUrl, messageUrl } = deriveHttpUrls(hubUrl, authToken);
@@ -243,10 +331,14 @@ export function useRemoteSocket(onMessage: (msg: InboundMessage) => void) {
 
       es.onopen = () => {
         console.log('[RemoteSocket] Connected to Hub via SSE (HTTP)');
-        setIsHubConnected(true);
-        setActiveTransport('http');
-        // 接続直後に初期状態リクエスト
-        postHttpMessage({ type: 'get_status' }, messageUrl);
+        onConnectionEstablished('http');
+
+        // スロットル付き初期状態リクエスト (最低2秒間隔)
+        const now = Date.now();
+        if (now - lastStatusSentTimeRef.current >= STATUS_REQUEST_THROTTLE_MS) {
+          lastStatusSentTimeRef.current = now;
+          postHttpMessage({ type: 'get_status' }, messageUrl);
+        }
       };
 
       es.onmessage = (event) => {
@@ -263,17 +355,35 @@ export function useRemoteSocket(onMessage: (msg: InboundMessage) => void) {
         setIsHubConnected(false);
         setIsAgentConnected(false);
         setIsExecuting(false);
+
+        // ★超重要: ブラウザ独自の無限高速自動再接続を止めるため、直ちに close する！
+        if (eventSourceRef.current) {
+          eventSourceRef.current.onopen = null;
+          eventSourceRef.current.onmessage = null;
+          eventSourceRef.current.onerror = null;
+          try {
+            eventSourceRef.current.close();
+          } catch {
+            // ignore
+          }
+          eventSourceRef.current = null;
+        }
+
+        // 指数バックオフで安全に再接続
+        scheduleReconnect('http');
       };
     } catch (e) {
       console.error('[RemoteSocket] Failed to create EventSource connection:', e);
-      reconnectTimerRef.current = setTimeout(connectHttp, 4000);
+      scheduleReconnect('http');
     }
-  }, [settings, cleanupConnections, postHttpMessage, handleInbound]);
+  }, [cleanupConnections, onConnectionEstablished, handleInbound, postHttpMessage, scheduleReconnect]);
+
+  connectHttpRef.current = connectHttp;
 
   // WebSocket 接続（auto モード時はエラー・タイムアウト時に connectHttp へフォールバック）
   const connectWs = useCallback(() => {
     cleanupConnections();
-    const { hubUrl, authToken, transportMode = 'auto' } = settings;
+    const { hubUrl, authToken, transportMode = 'auto' } = settingsRef.current;
     if (!hubUrl) return;
 
     try {
@@ -286,11 +396,15 @@ export function useRemoteSocket(onMessage: (msg: InboundMessage) => void) {
       const ws = new WebSocket(urlObj.toString());
       wsRef.current = ws;
 
+      let hasHandshakeTimedOut = false;
+
       // auto モード時: 3.5秒以内に WebSocket が open しない場合は HTTP (SSE) へフォールバック
       if (transportMode === 'auto') {
         fallbackTimerRef.current = setTimeout(() => {
+          fallbackTimerRef.current = null;
           if (wsRef.current && wsRef.current.readyState !== WebSocket.OPEN) {
             console.warn('[RemoteSocket] WebSocket handshake timeout (3.5s). Falling back to HTTP (SSE+POST)...');
+            hasHandshakeTimedOut = true;
             connectHttp();
           }
         }, 3500);
@@ -302,8 +416,7 @@ export function useRemoteSocket(onMessage: (msg: InboundMessage) => void) {
           fallbackTimerRef.current = null;
         }
         console.log('[RemoteSocket] Connected to Hub via WebSocket');
-        setIsHubConnected(true);
-        setActiveTransport('ws');
+        onConnectionEstablished('ws');
         ws.send(JSON.stringify({ type: 'get_status' }));
       };
 
@@ -328,63 +441,103 @@ export function useRemoteSocket(onMessage: (msg: InboundMessage) => void) {
         setActiveTransport('none');
         wsRef.current = null;
 
+        if (fallbackTimerRef.current) {
+          clearTimeout(fallbackTimerRef.current);
+          fallbackTimerRef.current = null;
+        }
+
+        if (hasHandshakeTimedOut) {
+          return;
+        }
+
+        // 切断時は即時再接続せず、必ず指数バックオフタイマーを通す
         if (transportMode === 'auto') {
-          console.log('[RemoteSocket] WebSocket closed in auto mode. Switching to HTTP (SSE+POST)...');
-          connectHttp();
+          console.log('[RemoteSocket] WebSocket closed in auto mode. Scheduling HTTP fallback with backoff...');
+          scheduleReconnect('http');
         } else {
-          reconnectTimerRef.current = setTimeout(connectWs, 3000);
+          scheduleReconnect('ws');
         }
       };
 
       ws.onerror = (err) => {
         console.error('[RemoteSocket] WebSocket error:', err);
-        if (transportMode === 'auto') {
-          if (fallbackTimerRef.current) {
-            clearTimeout(fallbackTimerRef.current);
-            fallbackTimerRef.current = null;
-          }
-          console.log('[RemoteSocket] WebSocket error in auto mode. Switching to HTTP (SSE+POST)...');
-          connectHttp();
-        }
+        // ws.onerror で再接続を呼ばず、ws.onclose に一元化して二重リクエストを防ぐ
       };
     } catch (e) {
       console.error('[RemoteSocket] Failed to create WebSocket connection:', e);
       if (transportMode === 'auto') {
-        connectHttp();
+        scheduleReconnect('http');
       } else {
-        reconnectTimerRef.current = setTimeout(connectWs, 3000);
+        scheduleReconnect('ws');
       }
     }
-  }, [settings, cleanupConnections, connectHttp, handleInbound]);
+  }, [cleanupConnections, onConnectionEstablished, handleInbound, connectHttp, scheduleReconnect]);
+
+  connectWsRef.current = connectWs;
 
   // 接続ディスパッチャー
   const connect = useCallback(() => {
-    const mode = settings.transportMode || 'auto';
+    const mode = settingsRef.current.transportMode || 'auto';
     if (mode === 'http') {
       connectHttp();
     } else {
       connectWs();
     }
-  }, [settings.transportMode, connectHttp, connectWs]);
+  }, [connectHttp, connectWs]);
 
+  // 設定の主要プロパティが実際に変更された場合のみ再接続する
+  const prevConfigRef = useRef({
+    hubUrl: settings.hubUrl,
+    authToken: settings.authToken,
+    transportMode: settings.transportMode,
+  });
+
+  useEffect(() => {
+    const prev = prevConfigRef.current;
+    const curr = {
+      hubUrl: settings.hubUrl,
+      authToken: settings.authToken,
+      transportMode: settings.transportMode,
+    };
+
+    const isChanged =
+      prev.hubUrl !== curr.hubUrl ||
+      prev.authToken !== curr.authToken ||
+      prev.transportMode !== curr.transportMode;
+
+    prevConfigRef.current = curr;
+
+    if (isChanged) {
+      console.log('[RemoteSocket] Connection config changed. Reconnecting...');
+      retryCountRef.current = 0;
+      cleanupConnections();
+      connect();
+    }
+  }, [settings.hubUrl, settings.authToken, settings.transportMode, cleanupConnections, connect]);
+
+  // 初回マウント時のみ接続
   useEffect(() => {
     connect();
     return () => {
       cleanupConnections();
     };
-  }, [connect, cleanupConnections]);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // モバイル画面復帰（visibilitychange）時の自動健全性チェック
+  // モバイル画面復帰（visibilitychange）時の自動健全性チェック（スロットル＆バックオフ付き）
   useEffect(() => {
     const handleVisibilityChange = () => {
       if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
-        console.log('[RemoteSocket] Page visible again. Checking connection...');
-        if (!isHubConnected) {
-          connect();
-        } else if (activeTransport === 'http') {
-          const { hubUrl, authToken } = settings;
-          const { messageUrl } = deriveHttpUrls(hubUrl, authToken);
-          postHttpMessage({ type: 'get_status' }, messageUrl);
+        console.log('[RemoteSocket] Page visible again.');
+        if (!wsRef.current && !eventSourceRef.current && !reconnectTimerRef.current) {
+          scheduleReconnect();
+        } else if (eventSourceRef.current && activeTransport === 'http') {
+          const now = Date.now();
+          if (now - lastStatusSentTimeRef.current >= STATUS_REQUEST_THROTTLE_MS) {
+            lastStatusSentTimeRef.current = now;
+            const { hubUrl, authToken } = settingsRef.current;
+            const { messageUrl } = deriveHttpUrls(hubUrl, authToken);
+            postHttpMessage({ type: 'get_status' }, messageUrl);
+          }
         }
       }
     };
@@ -395,7 +548,7 @@ export function useRemoteSocket(onMessage: (msg: InboundMessage) => void) {
         document.removeEventListener('visibilitychange', handleVisibilityChange);
       };
     }
-  }, [isHubConnected, activeTransport, connect, settings, postHttpMessage]);
+  }, [activeTransport, scheduleReconnect, postHttpMessage]);
 
   // 汎用メッセージ送信関数
   const send = useCallback((msg: OutboundMessage) => {

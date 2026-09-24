@@ -100,6 +100,7 @@ export interface ExecuteCopilotParams {
   isResume: boolean;
   workDir: string;
   model?: string;
+  reasoningEffort?: string;
   onSendToHub: (msg: any) => void;
   onTurnEnd: () => void;
 }
@@ -146,6 +147,17 @@ export class CopilotTurnRunner {
       args.push('--model', model.trim());
     }
 
+    // --reasoning-effort の付与（パラメータ指定 > 環境変数 COPILOT_REASONING_EFFORT > デフォルト 'high'）
+    const reasoningEffort = (
+      params.reasoningEffort ||
+      getEnvCaseInsensitive('COPILOT_REASONING_EFFORT', 'copilot_reasoning_effort') ||
+      'high'
+    ).trim();
+
+    if (reasoningEffort && reasoningEffort.toLowerCase() !== 'off' && reasoningEffort.toLowerCase() !== 'none') {
+      args.push('--reasoning-effort', reasoningEffort);
+    }
+
     if (isResume) {
       args.push(`--resume=${effectiveSessionId}`);
     } else {
@@ -156,6 +168,9 @@ export class CopilotTurnRunner {
     console.log(`[CopilotRunner] Session ID: ${effectiveSessionId} (isResume: ${isResume})`);
     if (model) {
       console.log(`[CopilotRunner] Model     : ${model.trim()}`);
+    }
+    if (reasoningEffort && reasoningEffort.toLowerCase() !== 'off' && reasoningEffort.toLowerCase() !== 'none') {
+      console.log(`[CopilotRunner] Reasoning : ${reasoningEffort}`);
     }
     console.log(`[CopilotRunner] Working dir: ${workDir}`);
 

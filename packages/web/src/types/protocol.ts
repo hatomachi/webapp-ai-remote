@@ -129,6 +129,7 @@ export interface SendPromptMessage {
   permissionMode?: PermissionMode;
   model?: string;
   engine?: AIEngine;
+  reasoningEffort?: string;
 }
 
 export interface AbortMessage {

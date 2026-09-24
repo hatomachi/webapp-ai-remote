@@ -479,6 +479,7 @@ async function executeCopilotTurn(params: {
   isResume?: boolean;
   cwd?: string;
   model?: string;
+  reasoningEffort?: string;
 }) {
   if (currentChildProcess || copilotRunner.isRunning) {
     sendToHub({
@@ -504,6 +505,7 @@ async function executeCopilotTurn(params: {
     isResume: initialResume,
     workDir,
     model: params.model,
+    reasoningEffort: params.reasoningEffort,
     onSendToHub: (msg) => sendToHub(msg),
     onTurnEnd: () => {
       // 完了通知等の追加処理があればここに記述

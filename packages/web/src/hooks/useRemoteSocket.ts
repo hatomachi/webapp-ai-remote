@@ -13,6 +13,7 @@ export const DEFAULT_AVAILABLE_MODELS = [
   'claude-opus-4-7',
   'claude-sonnet-4-6',
   'claude-haiku-4-5',
+  'gemini-3.7-flash',
 ];
 
 export interface SocketSettings {
@@ -417,7 +418,8 @@ export function useRemoteSocket(onMessage: (msg: InboundMessage) => void) {
     cwd?: string,
     permissionMode: PermissionMode = 'acceptEdits',
     model?: string,
-    engine?: AIEngine
+    engine?: AIEngine,
+    reasoningEffort?: string
   ) => {
     const payload: SendPromptMessage = {
       type: 'prompt',
@@ -428,6 +430,7 @@ export function useRemoteSocket(onMessage: (msg: InboundMessage) => void) {
       permissionMode,
       model,
       engine,
+      reasoningEffort,
     };
     const ok = send(payload);
     if (ok) {

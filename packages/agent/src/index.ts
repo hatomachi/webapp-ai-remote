@@ -744,6 +744,7 @@ async function executeClaudeTurn(params: {
 
     let hasOutput = false;
     let resumeNotFound = false;
+    let sessionAlreadyInUse = false;
 
     // 今回のターンで記録するメッセージ
     const turnUserMessage: ChatMessage = {
@@ -772,6 +773,11 @@ async function executeClaudeTurn(params: {
       },
       stdio: ['pipe', 'pipe', 'pipe'],
       shell: isWindows
+    });
+
+    // EPIPE 防止: 子プロセスが即座に終了した際の未捕捉例外クラッシュを防止
+    child.stdin?.on('error', (err: any) => {
+      console.warn('[Agent] child.stdin error handled (EPIPE prevented):', err.message);
     });
 
     currentChildProcess = child;
@@ -955,6 +961,9 @@ async function executeClaudeTurn(params: {
       if (line.includes('No conversation found with session ID')) {
         resumeNotFound = true;
       }
+      if (line.includes('is already in use')) {
+        sessionAlreadyInUse = true;
+      }
       sendToHub({
         type: 'claude_raw_log',
         stream: 'stderr',
@@ -967,7 +976,15 @@ async function executeClaudeTurn(params: {
       currentChildProcess = null;
       pendingApprovals.clear();
 
-      // もし --resume で過去セッションが見つからずに即終了した場合、--session-id で自動フォールバック再試行！
+      // 1. もし --session-id で「すでに存在する」と言われた場合、--resume で自動再試行！
+      if (!resumeMode && sessionAlreadyInUse && !hasOutput) {
+        console.warn(`[Agent] Session ${activeSessionId} is already in use. Automatically falling back to --resume...`);
+        knownSessions.add(activeSessionId);
+        runProcess(true);
+        return;
+      }
+
+      // 2. もし --resume で過去セッションが見つからずに即終了した場合、--session-id で自動フォールバック再試行！
       if (resumeMode && resumeNotFound && !hasOutput) {
         console.warn(`[Agent] Session ${activeSessionId} not found to resume. Falling back to fresh --session-id...`);
         knownSessions.delete(activeSessionId);

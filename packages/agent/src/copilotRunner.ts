@@ -396,10 +396,15 @@ export class CopilotTurnRunner {
       }
     });
 
+    let resumeNotFound = false;
+
     // stderr の収集
     const readlineStderr = createInterface({ input: child.stderr });
     readlineStderr.on('line', (line) => {
       console.warn('[CopilotRunner] stderr:', line);
+      if (line.includes('No session, task, or name matched')) {
+        resumeNotFound = true;
+      }
       onSendToHub({
         type: 'claude_raw_log',
         stream: 'stderr',
@@ -410,6 +415,13 @@ export class CopilotTurnRunner {
     child.on('close', async (code, signal) => {
       console.log(`[CopilotRunner] Process exited with code: ${code}, signal: ${signal}`);
       this.currentChild = null;
+
+      // もし --resume で過去セッションが見つからずに即終了した場合、--session-id で自動フォールバック再試行！
+      if (isResume && resumeNotFound && !hasOutput) {
+        console.warn(`[CopilotRunner] Session ${effectiveSessionId} not found to resume. Falling back to fresh --session-id...`);
+        this.execute({ ...params, isResume: false });
+        return;
+      }
 
       if (!hasOutput && code !== 0) {
         onSendToHub({

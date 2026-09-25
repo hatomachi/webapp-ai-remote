@@ -2,8 +2,8 @@ import React, { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkBreaks from 'remark-breaks';
-import { AlertTriangle, Clock, DollarSign, Zap, Copy, Check } from 'lucide-react';
-import { ChatMessage as ChatMessageType } from '../types/protocol';
+import { AlertTriangle, Clock, DollarSign, Zap, Copy, Check, FileText, FileCode, Paperclip, X } from 'lucide-react';
+import { ChatMessage as ChatMessageType, AttachmentItem } from '../types/protocol';
 import { ToolUseCard } from './ToolUseCard';
 
 interface ChatMessageProps {
@@ -18,6 +18,7 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
   onToolDeny,
 }) => {
   const [copied, setCopied] = useState(false);
+  const [lightboxImage, setLightboxImage] = useState<{ src: string; name: string } | null>(null);
   const isUser = message.role === 'user';
   const isSystem = message.role === 'system';
 
@@ -26,6 +27,67 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
     navigator.clipboard.writeText(message.content);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  };
+
+  const renderAttachments = (attachments?: AttachmentItem[]) => {
+    if (!attachments || attachments.length === 0) return null;
+
+    const images = attachments.filter((a) => a.type.startsWith('image/'));
+    const nonImages = attachments.filter((a) => !a.type.startsWith('image/'));
+
+    return (
+      <div className="mb-2.5 space-y-2">
+        {/* 画像サムネイル一覧 */}
+        {images.length > 0 && (
+          <div className="flex flex-wrap gap-2">
+            {images.map((img) => {
+              const src = img.thumbnailData || img.data;
+              return (
+                <div
+                  key={img.id || img.name}
+                  className="group relative cursor-pointer overflow-hidden rounded-xl border border-slate-700/80 bg-slate-950/60 shadow-sm transition hover:border-indigo-500/80"
+                  onClick={() => setLightboxImage({ src: img.data || img.thumbnailData || '', name: img.name })}
+                  title={`${img.name} (${(img.size / 1024).toFixed(1)} KB)`}
+                >
+                  <img
+                    src={src}
+                    alt={img.name}
+                    className="h-20 w-20 sm:h-24 sm:w-24 object-cover transition-transform duration-200 group-hover:scale-105"
+                  />
+                  <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-end p-1">
+                    <span className="text-[10px] text-white/90 truncate max-w-full drop-shadow">
+                      {img.name}
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* テキスト・ドキュメント・コードファイル一覧 */}
+        {nonImages.length > 0 && (
+          <div className="flex flex-wrap gap-1.5">
+            {nonImages.map((file) => {
+              const sizeKb = (file.size / 1024).toFixed(1);
+              return (
+                <div
+                  key={file.id || file.name}
+                  className="flex items-center space-x-2 rounded-lg border border-slate-700/80 bg-slate-950/70 px-2.5 py-1.5 text-xs text-slate-200 shadow-sm"
+                  title={file.localPath ? `PC保存先: ${file.localPath}` : file.name}
+                >
+                  <FileText className="w-4 h-4 text-indigo-400 shrink-0" />
+                  <div className="min-w-0 max-w-[200px]">
+                    <div className="truncate font-medium text-slate-200">{file.name}</div>
+                    <div className="text-[10px] text-slate-400 font-mono">{sizeKb} KB</div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    );
   };
 
   if (isSystem) {
@@ -44,10 +106,41 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
     return (
       <div className="w-full my-3">
         <div className="rounded-2xl border border-slate-700/60 bg-slate-900/80 px-3.5 py-3 shadow-sm">
+          {renderAttachments(message.attachments)}
           <div className="text-[1em] leading-[1.6] text-slate-100 whitespace-pre-wrap break-words">
             {message.content}
           </div>
         </div>
+
+        {/* 画像拡大モーダル (Lightbox) */}
+        {lightboxImage && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm animate-fade-in"
+            onClick={() => setLightboxImage(null)}
+          >
+            <div
+              className="relative max-h-[90vh] max-w-[90vw] overflow-hidden rounded-2xl border border-slate-700 bg-slate-950 p-2 shadow-2xl"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between pb-2 px-2 border-b border-slate-800 text-xs text-slate-300">
+                <span className="truncate max-w-[80vw] font-mono">{lightboxImage.name}</span>
+                <button
+                  onClick={() => setLightboxImage(null)}
+                  className="rounded-lg p-1 text-slate-400 hover:bg-slate-800 hover:text-white"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              <div className="mt-2 flex items-center justify-center max-h-[80vh] overflow-auto">
+                <img
+                  src={lightboxImage.src}
+                  alt={lightboxImage.name}
+                  className="max-h-[75vh] max-w-full rounded-lg object-contain"
+                />
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   }

@@ -8,6 +8,7 @@ import {
   TransportMode,
   ActiveTransport,
   AIEngine,
+  AttachmentItem,
 } from '../types/protocol';
 
 export const DEFAULT_AVAILABLE_MODELS = [
@@ -572,7 +573,8 @@ export function useRemoteSocket(onMessage: (msg: InboundMessage) => void) {
     permissionMode: PermissionMode = 'acceptEdits',
     model?: string,
     engine?: AIEngine,
-    reasoningEffort?: string
+    reasoningEffort?: string,
+    attachments?: AttachmentItem[]
   ) => {
     const payload: SendPromptMessage = {
       type: 'prompt',
@@ -584,6 +586,7 @@ export function useRemoteSocket(onMessage: (msg: InboundMessage) => void) {
       model,
       engine,
       reasoningEffort,
+      attachments,
     };
     const ok = send(payload);
     if (ok) {

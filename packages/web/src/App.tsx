@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Send, Square, AlertCircle, ShieldAlert, Cpu, Bot, Type } from 'lucide-react';
+import { Send, Square, AlertCircle, ShieldAlert, Cpu, Bot, Type, Paperclip, X, FileText } from 'lucide-react';
 import { Header } from './components/Header';
 import { ChatMessage } from './components/ChatMessage';
 import { QuickActions } from './components/QuickActions';
@@ -14,6 +14,7 @@ import {
   ToolUseItem,
   ProjectInfo,
   AIEngine,
+  AttachmentItem,
 } from './types/protocol';
 
 const SESSIONS_STORAGE_KEY = 'ai_remote_sessions_v1';
@@ -33,6 +34,106 @@ function generateUUID(): string {
     const r = (Math.random() * 16) | 0;
     const v = c === 'x' ? r : (r & 0x3) | 0x8;
     return v.toString(16);
+  });
+}
+
+/**
+ * 画像ファイルを Canvas で圧縮＆リサイズ（長辺最大1600px、JPEG/WebP）
+ * あわせて 200px のサムネイルも生成
+ */
+async function processImageFile(file: File): Promise<AttachmentItem> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error(`画像ファイルの読み込みに失敗しました: ${file.name}`));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error(`画像の解析に失敗しました: ${file.name}`));
+      img.onload = () => {
+        try {
+          const maxDim = 1600;
+          let width = img.naturalWidth || img.width;
+          let height = img.naturalHeight || img.height;
+
+          if (width > maxDim || height > maxDim) {
+            if (width > height) {
+              height = Math.round((height * maxDim) / width);
+              width = maxDim;
+            } else {
+              width = Math.round((width * maxDim) / height);
+              height = maxDim;
+            }
+          }
+
+          // メイン画像 Canvas
+          const canvas = document.createElement('canvas');
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) throw new Error('Canvas context not available');
+          ctx.drawImage(img, 0, 0, width, height);
+
+          const mimeType = file.type === 'image/png' ? 'image/png' : 'image/jpeg';
+          const compressedDataUrl = canvas.toDataURL(mimeType, 0.85);
+
+          // サムネイル Canvas (長辺 200px)
+          const thumbMax = 200;
+          let tw = img.naturalWidth || img.width;
+          let th = img.naturalHeight || img.height;
+          if (tw > thumbMax || th > thumbMax) {
+            if (tw > th) {
+              th = Math.round((th * thumbMax) / tw);
+              tw = thumbMax;
+            } else {
+              tw = Math.round((tw * thumbMax) / th);
+              th = thumbMax;
+            }
+          }
+          const thumbCanvas = document.createElement('canvas');
+          thumbCanvas.width = tw;
+          thumbCanvas.height = th;
+          const thumbCtx = thumbCanvas.getContext('2d');
+          thumbCtx?.drawImage(img, 0, 0, tw, th);
+          const thumbDataUrl = thumbCanvas.toDataURL(mimeType, 0.7);
+
+          resolve({
+            id: generateUUID(),
+            name: file.name,
+            type: mimeType,
+            size: Math.round((compressedDataUrl.length * 3) / 4),
+            data: compressedDataUrl,
+            thumbnailData: thumbDataUrl,
+          });
+        } catch (e) {
+          reject(e);
+        }
+      };
+      img.src = reader.result as string;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+/**
+ * 非画像ファイル（テキスト・ログ・コード等）を Base64 として読み込み
+ */
+async function processGenericFile(file: File): Promise<AttachmentItem> {
+  return new Promise((resolve, reject) => {
+    // 10MB 超は弾く
+    if (file.size > 10 * 1024 * 1024) {
+      return reject(new Error(`ファイルサイズが上限(10MB)を超えています: ${file.name}`));
+    }
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error(`ファイルの読み込みに失敗しました: ${file.name}`));
+    reader.onload = () => {
+      resolve({
+        id: generateUUID(),
+        name: file.name,
+        type: file.type || 'text/plain',
+        size: file.size,
+        data: reader.result as string,
+      });
+    };
+    reader.readAsDataURL(file);
   });
 }
 
@@ -139,11 +240,93 @@ export function App() {
 
   // --- UI状態 ---
   const [inputText, setInputText] = useState('');
+  const [attachments, setAttachments] = useState<AttachmentItem[]>([]);
+  const [isProcessingFiles, setIsProcessingFiles] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
   const chatContainerRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const isAutoScrollEnabled = useRef(true);
+
+  // --- ファイル選択・追加ハンドラ ---
+  const handleSelectFiles = async (files: FileList | File[]) => {
+    if (!files || files.length === 0) return;
+    setIsProcessingFiles(true);
+    const newItems: AttachmentItem[] = [];
+
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      try {
+        if (file.type && file.type.startsWith('image/')) {
+          const item = await processImageFile(file);
+          newItems.push(item);
+        } else {
+          const item = await processGenericFile(file);
+          newItems.push(item);
+        }
+      } catch (err: any) {
+        alert(err.message || `ファイルの読み込みに失敗しました: ${file.name}`);
+      }
+    }
+
+    if (newItems.length > 0) {
+      setAttachments((prev) => [...prev, ...newItems]);
+    }
+    setIsProcessingFiles(false);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  };
+
+  const handleRemoveAttachment = (id: string) => {
+    setAttachments((prev) => prev.filter((a) => a.id !== id));
+  };
+
+  // --- クリップボードからの貼り付け (画像・テキストファイル等) ---
+  const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+
+    const filesToUpload: File[] = [];
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (item.kind === 'file') {
+        const file = item.getAsFile();
+        if (file) {
+          filesToUpload.push(file);
+        }
+      }
+    }
+
+    if (filesToUpload.length > 0) {
+      e.preventDefault();
+      handleSelectFiles(filesToUpload);
+    }
+  };
+
+  // --- ドラッグ＆ドロップ対応 ---
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      handleSelectFiles(e.dataTransfer.files);
+    }
+  };
 
   // --- セッション変更時にローカルストレージからメッセージ復元 ---
   useEffect(() => {
@@ -160,13 +343,32 @@ export function App() {
     }
   }, [currentSessionId]);
 
-  // --- メッセージ更新時にローカルストレージに永続化 ---
+  // --- メッセージ更新時にローカルストレージに永続化 (画像容量によるQuotaExceededErrorを防止) ---
   useEffect(() => {
     if (messages.length === 0) return;
     try {
+      // localStorageの5MB制限を守るため、フルBase64データを除去し、サムネイルとPC保存パスを残す
+      const sanitized = messages.map((m) => {
+        if (m.attachments && m.attachments.length > 0) {
+          return {
+            ...m,
+            attachments: m.attachments.map((a) => ({
+              id: a.id,
+              name: a.name,
+              type: a.type,
+              size: a.size,
+              localPath: a.localPath,
+              thumbnailData: a.thumbnailData,
+              data: a.thumbnailData || '',
+            })),
+          };
+        }
+        return m;
+      });
+
       localStorage.setItem(
         `${MESSAGES_STORAGE_PREFIX}${currentSessionId}`,
-        JSON.stringify(messages)
+        JSON.stringify(sanitized)
       );
 
       // セッションリストのメタ情報（更新日時・発言数）も更新
@@ -206,7 +408,7 @@ export function App() {
         return updated;
       });
     } catch (e) {
-      console.error('Failed to save session messages', e);
+      console.warn('Failed to save session messages to localStorage:', e);
     }
   }, [messages, currentSessionId, currentCwd, currentProject, selectedEngine]);
 
@@ -216,6 +418,20 @@ export function App() {
       console.log('[App] Inbound event:', msg.type);
 
       if (msg.type === 'turn_start') {
+        // 直前のユーザーメッセージに PC 側保存パス (localPath) 付きの添付ファイル情報を反映
+        if (msg.attachments && msg.attachments.length > 0) {
+          setMessages((prev) => {
+            const next = [...prev];
+            for (let i = next.length - 1; i >= 0; i--) {
+              if (next[i].role === 'user') {
+                next[i] = { ...next[i], attachments: msg.attachments };
+                break;
+              }
+            }
+            return next;
+          });
+        }
+
         // 新規ターンのアシスタント吹き出しを用意（ストリーミング待機）
         const newMsgId = `assistant-${Date.now()}`;
         setMessages((prev) => [
@@ -660,21 +876,25 @@ export function App() {
 
   // --- 送信処理 ---
   const handleSubmitPrompt = (textToSend?: string) => {
-    const text = (textToSend || inputText).trim();
-    if (!text || isExecuting) return;
+    const text = (textToSend !== undefined ? textToSend : inputText).trim();
+    if ((!text && attachments.length === 0) || isExecuting) return;
+
+    const currentAttachments = [...attachments];
 
     // ユーザーメッセージを追加
     const userMsg: ChatMessageType = {
       id: `user-${Date.now()}`,
       role: 'user',
-      content: text,
+      content: text || (currentAttachments.length > 0 ? '（添付ファイルを送信しました）' : ''),
       timestamp: new Date().toISOString(),
       sessionId: currentSessionId,
       engine: selectedEngine,
+      attachments: currentAttachments.length > 0 ? currentAttachments : undefined,
     };
 
     setMessages((prev) => [...prev, userMsg]);
     setInputText('');
+    setAttachments([]);
     isAutoScrollEnabled.current = true;
     scrollToBottom(true);
 
@@ -682,13 +902,15 @@ export function App() {
 
     // WebSocket で Agent に送信
     sendPrompt(
-      text,
+      text || (currentAttachments.length > 0 ? '添付ファイルを確認して回答してください。' : ''),
       currentSessionId,
       isResume,
       currentCwd || currentProject?.path || undefined,
       permissionMode,
       selectedModel,
-      selectedEngine
+      selectedEngine,
+      undefined,
+      currentAttachments.length > 0 ? currentAttachments : undefined
     );
   };
 
@@ -853,7 +1075,14 @@ export function App() {
       />
 
       {/* フッター（プロンプト入力 & 送信 / 中断） */}
-      <footer className="safe-bottom bg-slate-900 border-t border-slate-800 p-2.5 shrink-0 select-none">
+      <footer
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+        className={`safe-bottom bg-slate-900 border-t ${
+          isDragging ? 'border-indigo-500 bg-indigo-950/20' : 'border-slate-800'
+        } p-2.5 shrink-0 select-none transition-colors`}
+      >
         {/* 権限モード & モデル選択バー */}
         <div className="flex flex-wrap items-center justify-between text-[11px] text-slate-400 px-1 mb-2 gap-2">
           <div className="flex items-center space-x-3 flex-wrap gap-y-1">
@@ -936,11 +1165,70 @@ export function App() {
           )}
         </div>
 
+        {/* 添付中ファイルプレビューバー */}
+        {attachments.length > 0 && (
+          <div className="flex items-center space-x-2 overflow-x-auto pb-2 mb-1.5 px-0.5 scrollbar-thin">
+            {attachments.map((att) => (
+              <div
+                key={att.id}
+                className="relative group shrink-0 flex items-center space-x-2 bg-slate-950 border border-slate-700/80 rounded-xl px-2.5 py-1.5 shadow-md"
+              >
+                {att.type.startsWith('image/') ? (
+                  <img
+                    src={att.thumbnailData || att.data}
+                    alt={att.name}
+                    className="w-8 h-8 rounded-lg object-cover border border-slate-700 shrink-0"
+                  />
+                ) : (
+                  <div className="w-8 h-8 rounded-lg bg-indigo-950/80 border border-indigo-800/80 flex items-center justify-center shrink-0">
+                    <FileText className="w-4 h-4 text-indigo-400" />
+                  </div>
+                )}
+                <div className="max-w-[120px] truncate text-left">
+                  <div className="text-xs font-medium text-slate-200 truncate">{att.name}</div>
+                  <div className="text-[10px] text-slate-400 font-mono">{(att.size / 1024).toFixed(1)} KB</div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handleRemoveAttachment(att.id)}
+                  className="rounded-full p-1 bg-slate-800 text-slate-400 hover:text-white hover:bg-rose-900/80 transition-colors"
+                  title="削除"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
         {/* 入力フォーム */}
         <div className="flex items-end space-x-2">
+          {/* 隠しファイル選択 input */}
+          <input
+            type="file"
+            multiple
+            ref={fileInputRef}
+            onChange={(e) => {
+              if (e.target.files) handleSelectFiles(e.target.files);
+            }}
+            className="hidden"
+          />
+
+          {/* クリップアイコン (添付ボタン) */}
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={!isAgentConnected || isExecuting || isProcessingFiles}
+            className="p-2.5 rounded-xl border border-slate-800 bg-slate-950/60 text-slate-400 hover:text-indigo-400 hover:border-indigo-500/50 hover:bg-slate-800/80 active:scale-95 disabled:opacity-40 disabled:pointer-events-none transition-all shrink-0"
+            title="ファイルを添付 (画像・ログ・テキスト・コード等)"
+          >
+            <Paperclip className="w-5 h-5" />
+          </button>
+
           <textarea
             value={inputText}
             onChange={(e) => setInputText(e.target.value)}
+            onPaste={handlePaste}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
@@ -952,7 +1240,11 @@ export function App() {
                 ? '社内PCがオフラインです...'
                 : isExecuting
                 ? 'Claude Code が実行中です...'
-                : 'Claude Code への指示を入力 (Enterで送信)...'
+                : isDragging
+                ? 'ファイルをここにドロップ...'
+                : isProcessingFiles
+                ? 'ファイルを処理中...'
+                : 'Claude Code への指示を入力 (📎でファイル添付, Enterで送信)...'
             }
             disabled={!isAgentConnected && !isExecuting}
             rows={Math.min(4, Math.max(1, inputText.split('\n').length))}
@@ -970,7 +1262,7 @@ export function App() {
           ) : (
             <button
               onClick={() => handleSubmitPrompt()}
-              disabled={!inputText.trim() || !isAgentConnected}
+              disabled={(!inputText.trim() && attachments.length === 0) || !isAgentConnected || isProcessingFiles}
               className="p-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white shadow-md shadow-indigo-950/50 active:scale-95 disabled:opacity-40 disabled:pointer-events-none transition-all shrink-0"
               title="送信"
             >

@@ -11,6 +11,7 @@ import {
   saveSessionHistory,
   deleteSession,
   ChatMessage,
+  AttachmentItem,
 } from './sessionManager.js';
 import { CopilotTurnRunner } from './copilotRunner.js';
 
@@ -471,6 +472,112 @@ function abortCurrentTurn() {
 }
 
 /**
+ * 添付ファイルを PC 側の一時ディレクトリ (~/.ai-remote/uploads/<sessionId>/) に保存
+ */
+function saveAttachments(
+  attachments: AttachmentItem[] | undefined,
+  sessionId: string
+): AttachmentItem[] {
+  if (!attachments || attachments.length === 0) return [];
+
+  const uploadsDir = path.join(os.homedir(), '.ai-remote', 'uploads', sessionId);
+  if (!fs.existsSync(uploadsDir)) {
+    fs.mkdirSync(uploadsDir, { recursive: true });
+  }
+
+  const result: AttachmentItem[] = [];
+
+  for (let i = 0; i < attachments.length; i++) {
+    const att = attachments[i];
+    try {
+      const originalName = att.name || `file_${i + 1}`;
+      const safeName = path.basename(originalName).replace(/[^\w\.\-\u3000-\u303f\u3040-\u309f\u30a0-\u30ff\uff00-\uffef\u4e00-\u9faf]/g, '_');
+      let targetPath = path.join(uploadsDir, safeName);
+
+      if (fs.existsSync(targetPath)) {
+        const ext = path.extname(safeName);
+        const base = path.basename(safeName, ext);
+        targetPath = path.join(uploadsDir, `${base}_${Date.now()}_${i}${ext}`);
+      }
+
+      const rawBase64 = (att.data || '').replace(/^data:[^;]+;base64,/, '');
+      const buffer = Buffer.from(rawBase64, 'base64');
+      fs.writeFileSync(targetPath, buffer);
+
+      console.log(`[Agent] 📎 Saved attachment: ${att.name} -> ${targetPath} (${buffer.length} bytes)`);
+
+      result.push({
+        ...att,
+        localPath: targetPath,
+      });
+    } catch (err: any) {
+      console.warn(`[Agent] Failed to save attachment ${att.name}:`, err.message);
+      result.push(att);
+    }
+  }
+
+  return result;
+}
+
+/**
+ * テキスト・コード・設定ファイルかどうか判定
+ */
+function isTextAttachment(att: AttachmentItem): boolean {
+  if (
+    att.type.startsWith('text/') ||
+    att.type === 'application/json' ||
+    att.type === 'application/javascript' ||
+    att.type === 'application/typescript' ||
+    att.type === 'application/xml'
+  ) {
+    return true;
+  }
+  const textExts = [
+    '.txt', '.log', '.csv', '.tsv', '.json', '.md', '.ts', '.tsx', '.js', '.jsx',
+    '.py', '.rb', '.go', '.rs', '.java', '.c', '.cpp', '.h', '.sh', '.bat', '.cmd',
+    '.ps1', '.yml', '.yaml', '.xml', '.html', '.css', '.scss', '.sql', '.diff', '.patch',
+    '.env', '.conf', '.ini', '.toml'
+  ];
+  const ext = path.extname(att.name || '').toLowerCase();
+  return textExts.includes(ext);
+}
+
+/**
+ * プロンプトに添付ファイル情報（保存先パス ＆ テキストファイル内容展開）を付加
+ */
+function formatPromptWithAttachments(
+  prompt: string,
+  attachments: AttachmentItem[]
+): string {
+  if (!attachments || attachments.length === 0) return prompt;
+
+  const notices: string[] = [];
+  notices.push('【添付ファイル】');
+
+  for (const att of attachments) {
+    const sizeKb = (att.size / 1024).toFixed(1);
+    const pathStr = att.localPath ? att.localPath : att.name;
+    notices.push(`- ファイル名: ${att.name} (${sizeKb} KB) | 保存先: ${pathStr}`);
+
+    // テキストファイルで、50KB 未満なら内容をプロンプト内にインライン展開
+    if (isTextAttachment(att) && att.localPath && fs.existsSync(att.localPath)) {
+      try {
+        const stats = fs.statSync(att.localPath);
+        if (stats.size <= 50 * 1024) {
+          const content = fs.readFileSync(att.localPath, 'utf-8');
+          const ext = path.extname(att.name).slice(1) || 'text';
+          notices.push(`\`\`\`${ext}\n// --- 添付ファイル内容: ${att.name} ---\n${content}\n\`\`\``);
+        }
+      } catch (err: any) {
+        console.warn(`[Agent] Failed to read text attachment content:`, err.message);
+      }
+    }
+  }
+
+  return `${notices.join('\n')}\n\n${prompt}`;
+}
+
+/**
  * GitHub Copilot CLI の 1 ターンを実行
  */
 async function executeCopilotTurn(params: {
@@ -481,6 +588,7 @@ async function executeCopilotTurn(params: {
   permissionMode?: string;
   model?: string;
   reasoningEffort?: string;
+  attachments?: AttachmentItem[];
 }) {
   if (currentChildProcess || copilotRunner.isRunning) {
     sendToHub({
@@ -491,7 +599,6 @@ async function executeCopilotTurn(params: {
     return;
   }
 
-  const prompt = params.text;
   const activeSessionId = params.sessionId || randomUUID();
   const initialResume = params.isResume !== undefined
     ? params.isResume
@@ -500,17 +607,56 @@ async function executeCopilotTurn(params: {
 
   knownSessions.add(activeSessionId);
 
+  // 添付ファイルを保存
+  const savedAttachments = saveAttachments(params.attachments, activeSessionId);
+  const fullPrompt = formatPromptWithAttachments(params.text, savedAttachments);
+
+  // 既存メッセージ履歴の読み込み
+  let existingMessages: ChatMessage[] = [];
+  try {
+    existingMessages = await getSessionMessages(activeSessionId, workDir);
+  } catch (err: any) {
+    console.warn('[Agent] Could not load prior session messages for Copilot:', err.message);
+  }
+
+  // 今回のターンで記録するメッセージ
+  const turnUserMessage: ChatMessage = {
+    id: `user-${Date.now()}`,
+    role: 'user',
+    content: params.text,
+    timestamp: new Date().toISOString(),
+    sessionId: activeSessionId,
+    engine: 'copilot',
+    attachments: savedAttachments.length > 0 ? savedAttachments : undefined,
+  };
+
   await copilotRunner.execute({
-    prompt,
+    prompt: fullPrompt,
     sessionId: activeSessionId,
     isResume: initialResume,
     workDir,
     permissionMode: params.permissionMode,
     model: params.model,
     reasoningEffort: params.reasoningEffort,
-    onSendToHub: (msg) => sendToHub(msg),
+    onSendToHub: (msg) => {
+      // turn_start メッセージに attachments を付与して Hub 経由で PWA へ通知
+      if (msg.type === 'turn_start' && savedAttachments.length > 0) {
+        msg.attachments = savedAttachments;
+      }
+      sendToHub(msg);
+    },
     onTurnEnd: () => {
-      // 完了通知等の追加処理があればここに記述
+      // セッション履歴に保存
+      try {
+        const updatedHistory = [...existingMessages, turnUserMessage];
+        saveSessionHistory(activeSessionId, updatedHistory, {
+          cwd: workDir,
+          projectId: path.basename(workDir),
+          engine: 'copilot',
+        });
+      } catch (err: any) {
+        console.warn('[Agent] Failed to persist Copilot session messages:', err.message);
+      }
     }
   });
 }
@@ -525,6 +671,7 @@ async function executeClaudeTurn(params: {
   cwd?: string;
   permissionMode?: string;
   model?: string;
+  attachments?: AttachmentItem[];
 }) {
   if (currentChildProcess || copilotRunner.isRunning) {
     sendToHub({
@@ -545,6 +692,10 @@ async function executeClaudeTurn(params: {
   const workDir = validateWorkDir(params.cwd);
 
   const permissionMode = params.permissionMode || 'acceptEdits';
+
+  // 添付ファイルを保存
+  const savedAttachments = saveAttachments(params.attachments, activeSessionId);
+  const fullPrompt = formatPromptWithAttachments(prompt, savedAttachments);
 
   // 既存メッセージ履歴の読み込み
   let existingMessages: ChatMessage[] = [];
@@ -587,6 +738,7 @@ async function executeClaudeTurn(params: {
       prompt,
       sessionId: activeSessionId,
       cwd: workDir,
+      attachments: savedAttachments.length > 0 ? savedAttachments : undefined,
       timestamp: new Date().toISOString()
     });
 
@@ -600,6 +752,7 @@ async function executeClaudeTurn(params: {
       content: prompt,
       timestamp: new Date().toISOString(),
       sessionId: activeSessionId,
+      attachments: savedAttachments.length > 0 ? savedAttachments : undefined,
     };
 
     const assistantMsg: ChatMessage = {
@@ -624,12 +777,35 @@ async function executeClaudeTurn(params: {
     currentChildProcess = child;
     let capturedSessionId = activeSessionId;
 
-    // stdin への初期ユーザープロンプト投入（--input-format=stream-json 形式）
+    // stdin への初期ユーザープロンプト投入（画像がある場合はマルチモーダル content blocks）
+    const imageAttachments = savedAttachments.filter((a) => a.type && a.type.startsWith('image/'));
+    let initialUserContent: any = fullPrompt;
+
+    if (imageAttachments.length > 0) {
+      const contentBlocks: any[] = [];
+      contentBlocks.push({
+        type: 'text',
+        text: fullPrompt
+      });
+      for (const img of imageAttachments) {
+        const rawBase64 = (img.data || '').replace(/^data:[^;]+;base64,/, '');
+        contentBlocks.push({
+          type: 'image',
+          source: {
+            type: 'base64',
+            media_type: img.type || 'image/png',
+            data: rawBase64
+          }
+        });
+      }
+      initialUserContent = contentBlocks;
+    }
+
     const initialUserMsg = {
       type: 'user',
       message: {
         role: 'user',
-        content: prompt
+        content: initialUserContent
       }
     };
     try {

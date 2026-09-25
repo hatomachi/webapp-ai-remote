@@ -30,12 +30,23 @@ export interface AgentStatusResponseMessage {
   timestamp: string;
 }
 
+export interface AttachmentItem {
+  id: string;
+  name: string;
+  type: string;
+  size: number;
+  data: string;
+  thumbnailData?: string;
+  localPath?: string;
+}
+
 export interface TurnStartMessage {
   type: 'turn_start';
   prompt: string;
   sessionId: string;
   cwd: string;
   engine?: AIEngine;
+  attachments?: AttachmentItem[];
   timestamp: string;
 }
 
@@ -130,6 +141,7 @@ export interface SendPromptMessage {
   model?: string;
   engine?: AIEngine;
   reasoningEffort?: string;
+  attachments?: AttachmentItem[];
 }
 
 export interface AbortMessage {
@@ -217,6 +229,7 @@ export interface ChatMessage {
   isError?: boolean;
   toolUses?: ToolUseItem[];
   stats?: ResultStats;
+  attachments?: AttachmentItem[];
 }
 
 export interface SessionInfo {

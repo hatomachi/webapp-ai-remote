@@ -30,6 +30,16 @@ export interface ResultStats {
   subtype?: string;
 }
 
+export interface AttachmentItem {
+  id: string;
+  name: string;
+  type: string;
+  size: number;
+  data: string;
+  thumbnailData?: string;
+  localPath?: string;
+}
+
 export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant' | 'system';
@@ -41,6 +51,7 @@ export interface ChatMessage {
   isError?: boolean;
   toolUses?: ToolUseItem[];
   stats?: ResultStats;
+  attachments?: AttachmentItem[];
 }
 
 const STORAGE_DIR = path.join(os.homedir(), '.ai-remote', 'sessions');

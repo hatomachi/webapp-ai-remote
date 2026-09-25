@@ -153,20 +153,18 @@ export class CopilotTurnRunner {
       args.push('--allow-all-tools');
     }
 
-    if (model && model.trim()) {
-      args.push('--model', model.trim());
+    // Copilot CLI に明示的な Copilot モデル名（例: gpt-5.4）以外（claude-*, gemini-*, default, auto 等）は付与せず、Copilot CLI 既定の自動最適モデルに任せる
+    const isExplicitCopilotModel = model && /^gpt-5/i.test(model.trim());
+    const effectiveModel = isExplicitCopilotModel ? model.trim() : undefined;
+
+    if (effectiveModel) {
+      args.push('--model', effectiveModel);
     }
 
-    // --reasoning-effort の付与（パラメータ指定 > 環境変数 COPILOT_REASONING_EFFORT > 対応モデル時デフォルト 'high'）
-    // ※ model が未指定または 'auto' の場合、Copilot CLI が "Model 'auto' does not support reasoning effort configuration" で拒否するため付与しない
+    // --reasoning-effort の付与（パラメータ指定 > 環境変数 COPILOT_REASONING_EFFORT）
     const explicitReasoning = params.reasoningEffort || getEnvCaseInsensitive('COPILOT_REASONING_EFFORT', 'copilot_reasoning_effort');
-    const reasoningEffort = (
-      explicitReasoning ||
-      (model && model.trim() && model.trim().toLowerCase() !== 'auto' ? 'high' : '')
-    ).trim();
-
-    if (reasoningEffort && reasoningEffort.toLowerCase() !== 'off' && reasoningEffort.toLowerCase() !== 'none') {
-      args.push('--reasoning-effort', reasoningEffort);
+    if (explicitReasoning && explicitReasoning.toLowerCase() !== 'off' && explicitReasoning.toLowerCase() !== 'none') {
+      args.push('--reasoning-effort', explicitReasoning.trim());
     }
 
     if (isResume) {
@@ -181,8 +179,8 @@ export class CopilotTurnRunner {
     if (model) {
       console.log(`[CopilotRunner] Model     : ${model.trim()}`);
     }
-    if (reasoningEffort && reasoningEffort.toLowerCase() !== 'off' && reasoningEffort.toLowerCase() !== 'none') {
-      console.log(`[CopilotRunner] Reasoning : ${reasoningEffort}`);
+    if (explicitReasoning && explicitReasoning.toLowerCase() !== 'off' && explicitReasoning.toLowerCase() !== 'none') {
+      console.log(`[CopilotRunner] Reasoning : ${explicitReasoning}`);
     }
     console.log(`[CopilotRunner] Working dir: ${workDir}`);
 
@@ -280,6 +278,28 @@ export class CopilotTurnRunner {
                   delta: {
                     type: 'text_delta',
                     text: deltaText
+                  }
+                }
+              }
+            });
+          }
+        }
+
+        // --- 1b. 完成メッセージ (assistant.message) のフォールバック ---
+        if (event.type === 'assistant.message') {
+          const fullContent = event.data?.content || '';
+          if (fullContent && !assistantMsg.content) {
+            assistantMsg.content = fullContent;
+            onSendToHub({
+              type: 'claude_event',
+              sessionId: capturedSessionId,
+              event: {
+                type: 'stream_event',
+                event: {
+                  type: 'content_block_delta',
+                  delta: {
+                    type: 'text_delta',
+                    text: fullContent
                   }
                 }
               }
@@ -397,13 +417,19 @@ export class CopilotTurnRunner {
     });
 
     let resumeNotFound = false;
+    let modelUnavailable = false;
+    let lastStderr = '';
 
     // stderr の収集
     const readlineStderr = createInterface({ input: child.stderr });
     readlineStderr.on('line', (line) => {
       console.warn('[CopilotRunner] stderr:', line);
+      lastStderr = line;
       if (line.includes('No session, task, or name matched')) {
         resumeNotFound = true;
+      }
+      if (line.includes('from --model flag is not available')) {
+        modelUnavailable = true;
       }
       onSendToHub({
         type: 'claude_raw_log',
@@ -416,7 +442,14 @@ export class CopilotTurnRunner {
       console.log(`[CopilotRunner] Process exited with code: ${code}, signal: ${signal}`);
       this.currentChild = null;
 
-      // もし --resume で過去セッションが見つからずに即終了した場合、--session-id で自動フォールバック再試行！
+      // 1. もし --model で未対応モデル名が渡されて即終了した場合、モデル指定なし（Copilot 自動最適）で自動フォールバック再試行！
+      if (modelUnavailable && params.model && !hasOutput) {
+        console.warn(`[CopilotRunner] Model '${params.model}' not available. Automatically retrying with Copilot default optimal model...`);
+        this.execute({ ...params, model: undefined });
+        return;
+      }
+
+      // 2. もし --resume で過去セッションが見つからずに即終了した場合、--session-id で自動フォールバック再試行！
       if (isResume && resumeNotFound && !hasOutput) {
         console.warn(`[CopilotRunner] Session ${effectiveSessionId} not found to resume. Falling back to fresh --session-id...`);
         this.execute({ ...params, isResume: false });
@@ -424,9 +457,12 @@ export class CopilotTurnRunner {
       }
 
       if (!hasOutput && code !== 0) {
+        const errorDetail = lastStderr
+          ? `Copilot CLI エラー: ${lastStderr}`
+          : `Copilot CLI が異常終了しました (exit code: ${code})。バイナリパスや認証 (copilot login) をご確認ください。`;
         onSendToHub({
           type: 'turn_error',
-          error: `Copilot CLI が異常終了しました (exit code: ${code})。バイナリパスや認証 (copilot login) をご確認ください。`,
+          error: errorDetail,
           timestamp: new Date().toISOString()
         });
       } else {

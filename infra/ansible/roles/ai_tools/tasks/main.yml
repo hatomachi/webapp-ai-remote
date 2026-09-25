@@ -1,0 +1,38 @@
+---
+- name: Check Node.js version
+  command: node -v
+  register: node_check
+  failed_when: false
+  changed_when: false
+
+- name: Setup NodeSource repository (Debian/Ubuntu)
+  shell: "curl -fsSL https://deb.nodesource.com/setup_{{ node_version }}.x | bash -"
+  when: ansible_os_family == "Debian" and (node_check.rc != 0 or not node_check.stdout.startswith('v20'))
+
+- name: Install Node.js (Debian/Ubuntu)
+  apt:
+    name: nodejs
+    state: present
+  when: ansible_os_family == "Debian" and (node_check.rc != 0 or not node_check.stdout.startswith('v20'))
+
+- name: Install Node.js (RedHat/Amazon Linux)
+  dnf:
+    name: "nodejs:{{ node_version }}"
+    state: present
+  when: ansible_os_family == "RedHat" and (node_check.rc != 0 or not node_check.stdout.startswith('v20'))
+
+- name: Install Claude Code CLI globally
+  npm:
+    name: "@anthropic-ai/claude-code"
+    global: yes
+    state: present
+
+- name: Check GitHub Copilot CLI
+  command: which copilot
+  register: copilot_check
+  failed_when: false
+  changed_when: false
+
+- name: Notice for GitHub Copilot CLI
+  debug:
+    msg: "GitHub Copilot CLI status: {{ 'Installed' if copilot_check.rc == 0 else 'Please configure your organization copilot CLI binary' }}"

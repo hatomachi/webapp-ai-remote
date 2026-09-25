@@ -1,0 +1,16 @@
+---
+- name: Setup Shared EC2 AI Remote Cockpit Platform
+  hosts: ec2
+  become: true
+  vars:
+    base_data_dir: /data
+    base_repos_dir: /data/base-repos
+    workspaces_dir: /data/workspaces
+    logs_dir: /data/logs
+    app_dir: /opt/webapp-ai-remote
+    node_version: "20"
+  
+  roles:
+    - common
+    - ai_tools
+    - webapp_remote

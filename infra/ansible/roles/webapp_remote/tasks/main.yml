@@ -1,0 +1,18 @@
+---
+- name: Create data directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+  loop:
+    - "{{ base_data_dir }}"
+    - "{{ base_repos_dir }}"
+    - "{{ workspaces_dir }}"
+    - "{{ logs_dir }}"
+
+- name: Setup auto git fetch cron for base-repos
+  cron:
+    name: "Sync all base-repos every 5 minutes"
+    minute: "*/5"
+    job: "for d in {{ base_repos_dir }}/*; do [ -d \"$d/.git\" ] && git -C \"$d\" fetch --all -q; done >/dev/null 2>&1"
+    user: root

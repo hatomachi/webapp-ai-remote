@@ -1,0 +1,40 @@
+---
+- name: Update apt cache (Debian/Ubuntu)
+  apt:
+    update_cache: yes
+    cache_valid_time: 3600
+  when: ansible_os_family == "Debian"
+
+- name: Install essential packages (Debian/Ubuntu)
+  apt:
+    name:
+      - git
+      - curl
+      - wget
+      - jq
+      - tmux
+      - unzip
+      - ripgrep
+      - cron
+    state: present
+  when: ansible_os_family == "Debian"
+
+- name: Install essential packages (RedHat/Amazon Linux)
+  dnf:
+    name:
+      - git
+      - curl
+      - wget
+      - jq
+      - tmux
+      - unzip
+      - ripgrep
+      - cronie
+    state: present
+  when: ansible_os_family == "RedHat"
+
+- name: Ensure cron service is running
+  service:
+    name: "{{ 'cron' if ansible_os_family == 'Debian' else 'crond' }}"
+    state: started
+    enabled: yes

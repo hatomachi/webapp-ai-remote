@@ -14,8 +14,11 @@
       - jq
       - tmux
       - unzip
+      - tar
+      - ca-certificates
       - ripgrep
       - cron
+      - build-essential
     state: present
   when: ansible_os_family == "Debian"
 
@@ -23,18 +26,59 @@
   dnf:
     name:
       - git
-      - curl
       - wget
       - jq
       - tmux
       - unzip
-      - ripgrep
+      - tar
+      - ca-certificates
       - cronie
     state: present
   when: ansible_os_family == "RedHat"
 
-- name: Ensure cron service is running
+- name: Check ripgrep binary exists (RedHat/Amazon Linux)
+  stat:
+    path: /usr/local/bin/rg
+  register: rg_stat
+  when: ansible_os_family == "RedHat"
+
+- name: Download ripgrep archive (RedHat/Amazon Linux)
+  get_url:
+    url: "https://github.com/BurntSushi/ripgrep/releases/download/15.2.0/ripgrep-15.2.0-{{ 'x86_64' if ansible_architecture == 'x86_64' else 'aarch64' }}-unknown-linux-musl.tar.gz"
+    dest: /tmp/ripgrep.tar.gz
+    mode: '0644'
+  when: ansible_os_family == "RedHat" and not rg_stat.stat.exists
+
+- name: Create ripgrep temp extraction dir (RedHat/Amazon Linux)
+  file:
+    path: /tmp/ripgrep-extract
+    state: directory
+    mode: '0755'
+  when: ansible_os_family == "RedHat" and not rg_stat.stat.exists
+
+- name: Extract ripgrep archive (RedHat/Amazon Linux)
+  unarchive:
+    src: /tmp/ripgrep.tar.gz
+    dest: /tmp/ripgrep-extract
+    remote_src: yes
+  when: ansible_os_family == "RedHat" and not rg_stat.stat.exists
+
+- name: Install ripgrep binary (RedHat/Amazon Linux)
+  shell: cp /tmp/ripgrep-extract/*/rg /usr/local/bin/rg && chmod 0755 /usr/local/bin/rg
+  when: ansible_os_family == "RedHat" and not rg_stat.stat.exists
+
+- name: Cleanup ripgrep temp files (RedHat/Amazon Linux)
+  file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /tmp/ripgrep.tar.gz
+    - /tmp/ripgrep-extract
+  when: ansible_os_family == "RedHat" and not rg_stat.stat.exists
+
+- name: Ensure cron service is running (systemd hosts)
   service:
     name: "{{ 'cron' if ansible_os_family == 'Debian' else 'crond' }}"
     state: started
     enabled: yes
+  when: not is_container and ansible_service_mgr == "systemd"

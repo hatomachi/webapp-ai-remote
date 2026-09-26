@@ -15,17 +15,59 @@
     state: present
   when: ansible_os_family == "Debian" and (node_check.rc != 0 or not node_check.stdout.startswith('v20'))
 
-- name: Install Node.js (RedHat/Amazon Linux)
+- name: Install Node.js 20 (RedHat/Amazon Linux)
   dnf:
-    name: "nodejs:{{ node_version }}"
+    name:
+      - "nodejs{{ node_version }}"
+      - "nodejs{{ node_version }}-npm"
     state: present
+  register: dnf_node20_res
+  failed_when: false
   when: ansible_os_family == "RedHat" and (node_check.rc != 0 or not node_check.stdout.startswith('v20'))
 
-- name: Install Claude Code CLI globally
-  npm:
-    name: "@anthropic-ai/claude-code"
-    global: yes
+- name: Fallback install Node.js (standard nodejs package)
+  dnf:
+    name: nodejs
     state: present
+  when: ansible_os_family == "RedHat" and (node_check.rc != 0 or not node_check.stdout.startswith('v20')) and (dnf_node20_res.rc is defined and dnf_node20_res.rc != 0)
+
+- name: Verify Node.js and npm are installed
+  command: "{{ item }}"
+  loop:
+    - node -v
+    - npm -v
+  register: node_verify
+  changed_when: false
+
+- name: Check Claude Code CLI
+  command: which claude
+  register: claude_check
+  failed_when: false
+  changed_when: false
+
+- name: Install Claude Code CLI globally
+  command: npm install -g @anthropic-ai/claude-code
+  when: claude_check.rc != 0
+
+- name: Check GitHub CLI (gh)
+  command: which gh
+  register: gh_check
+  failed_when: false
+  changed_when: false
+
+- name: Install GitHub CLI (Debian/Ubuntu)
+  apt:
+    name: gh
+    state: present
+  when: ansible_os_family == "Debian" and gh_check.rc != 0
+  failed_when: false
+
+- name: Install GitHub CLI (RedHat/Amazon Linux)
+  dnf:
+    name: gh
+    state: present
+  when: ansible_os_family == "RedHat" and gh_check.rc != 0
+  failed_when: false
 
 - name: Check GitHub Copilot CLI
   command: which copilot
@@ -35,4 +77,4 @@
 
 - name: Notice for GitHub Copilot CLI
   debug:
-    msg: "GitHub Copilot CLI status: {{ 'Installed' if copilot_check.rc == 0 else 'Please configure your organization copilot CLI binary' }}"
+    msg: "GitHub Copilot CLI status: {{ 'Installed at ' + copilot_check.stdout if copilot_check.rc == 0 else 'Copilot binary not found in PATH. Please place your organization copilot binary in /usr/local/bin/copilot' }}"

@@ -1,0 +1,22 @@
+[Unit]
+Description=WebApp AI Remote Bridge Agent
+After=network.target docker.service
+Wants=docker.service
+
+[Service]
+Type=simple
+User={{ app_user }}
+WorkingDirectory={{ app_dir }}/packages/agent
+EnvironmentFile=-{{ app_dir }}/packages/agent/.env
+Environment=NODE_ENV=production
+Environment=BASE_DATA_DIR={{ base_data_dir }}
+Environment=DEFAULT_CWD={{ workspaces_dir }}
+Environment=HUB_URL={{ hub_url }}
+ExecStart=/usr/bin/npm run dev
+Restart=always
+RestartSec=5
+StandardOutput=append:{{ logs_dir }}/agent.log
+StandardError=append:{{ logs_dir }}/agent.error.log
+
+[Install]
+WantedBy=multi-user.target

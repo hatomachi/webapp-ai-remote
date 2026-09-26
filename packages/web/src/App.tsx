@@ -5,6 +5,7 @@ import { ChatMessage } from './components/ChatMessage';
 import { QuickActions } from './components/QuickActions';
 import { SessionDrawer } from './components/SessionDrawer';
 import { SettingsModal } from './components/SettingsModal';
+import { AdminDrawer } from './components/AdminDrawer';
 import { useRemoteSocket, DEFAULT_AVAILABLE_MODELS } from './hooks/useRemoteSocket';
 import {
   InboundMessage,
@@ -245,6 +246,7 @@ export function App() {
   const [isDragging, setIsDragging] = useState(false);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isAdminDrawerOpen, setIsAdminDrawerOpen] = useState(false);
 
   const chatContainerRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -731,6 +733,15 @@ export function App() {
     sendToolApproval,
     sendPrompt,
     abort,
+    baseRepos,
+    workspaces,
+    diskStats,
+    isLoadingAdmin,
+    adminActionStatus,
+    requestBaseRepos,
+    requestWorkspaces,
+    cloneBaseRepo,
+    cleanupWorkspace,
   } = useRemoteSocket(handleInboundMessage);
 
   // 利用可能モデルの変更時に選択中モデルを同期・フォールバック
@@ -1008,6 +1019,7 @@ export function App() {
         isExecuting={isExecuting}
         onOpenDrawer={() => setIsDrawerOpen(true)}
         onOpenSettings={() => setIsSettingsOpen(true)}
+        onOpenAdmin={() => setIsAdminDrawerOpen(true)}
       />
 
       {/* ツール承認待ち通知バナー */}
@@ -1311,6 +1323,22 @@ export function App() {
         onSave={updateSettings}
         fontSize={fontSize}
         onChangeFontSize={handleSelectFontSize}
+      />
+
+      {/* 共有EC2マルチテナント管理ドロワー */}
+      <AdminDrawer
+        isOpen={isAdminDrawerOpen}
+        onClose={() => setIsAdminDrawerOpen(false)}
+        baseRepos={baseRepos}
+        workspaces={workspaces}
+        diskStats={diskStats}
+        isLoading={isLoadingAdmin}
+        actionStatus={adminActionStatus}
+        onRequestBaseRepos={requestBaseRepos}
+        onRequestWorkspaces={requestWorkspaces}
+        onCloneBaseRepo={cloneBaseRepo}
+        onCleanupWorkspace={cleanupWorkspace}
+        isAgentConnected={isAgentConnected}
       />
     </div>
   );

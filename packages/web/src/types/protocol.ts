@@ -158,14 +158,16 @@ export interface WorkspaceItem {
   repos: WorkspaceRepoItem[];
 }
 
+export interface DiskStats {
+  totalBytes: number;
+  usedBytes: number;
+  freeBytes: number;
+}
+
 export interface AdminWorkspacesListMessage {
   type: 'admin:workspaces_list';
   workspaces: WorkspaceItem[];
-  diskStats: {
-    totalBytes: number;
-    usedBytes: number;
-    freeBytes: number;
-  };
+  diskStats: DiskStats;
   timestamp: string;
 }
 

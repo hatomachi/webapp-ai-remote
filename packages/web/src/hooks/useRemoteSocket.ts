@@ -9,6 +9,10 @@ import {
   ActiveTransport,
   AIEngine,
   AttachmentItem,
+  UserCredentials,
+  AdminRepoItem,
+  WorkspaceItem,
+  DiskStats,
 } from '../types/protocol';
 
 export const DEFAULT_AVAILABLE_MODELS = [
@@ -24,6 +28,7 @@ export interface SocketSettings {
   defaultCwd: string;
   transportMode?: TransportMode;
   availableModels?: string[];
+  userCredentials?: UserCredentials;
 }
 
 const SETTINGS_KEY = 'ai_remote_settings_v1';
@@ -57,6 +62,7 @@ export function getDefaultSettings(): SocketSettings {
     defaultCwd: '',
     transportMode: 'auto',
     availableModels: [...DEFAULT_AVAILABLE_MODELS],
+    userCredentials: {},
   };
 }
 
@@ -162,6 +168,16 @@ export function useRemoteSocket(onMessage: (msg: InboundMessage) => void) {
   const [availableProjects, setAvailableProjects] = useState<ProjectInfo[]>([]);
   const [projectsBaseDir, setProjectsBaseDir] = useState<string>('');
   const [activeTransport, setActiveTransport] = useState<ActiveTransport>('none');
+  const [baseRepos, setBaseRepos] = useState<AdminRepoItem[]>([]);
+  const [workspaces, setWorkspaces] = useState<WorkspaceItem[]>([]);
+  const [diskStats, setDiskStats] = useState<DiskStats | null>(null);
+  const [isLoadingAdmin, setIsLoadingAdmin] = useState<boolean>(false);
+  const [adminActionStatus, setAdminActionStatus] = useState<{
+    type: 'clone' | 'cleanup';
+    success: boolean;
+    message: string;
+    timestamp: number;
+  } | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
@@ -188,13 +204,19 @@ export function useRemoteSocket(onMessage: (msg: InboundMessage) => void) {
       setIsAgentConnected(true);
       setAgentHostname(msg.hostname);
       setAgentCwd(msg.defaultCwd);
-      sendFn({ type: 'list_projects' });
+      sendFn({
+        type: 'list_projects',
+        userName: settingsRef.current.userCredentials?.userName || undefined,
+      });
     } else if (msg.type === 'agent_status') {
       setIsAgentConnected(true);
       setAgentHostname(msg.hostname);
       setAgentCwd(msg.cwd);
       setIsExecuting(msg.isBusy);
-      sendFn({ type: 'list_projects' });
+      sendFn({
+        type: 'list_projects',
+        userName: settingsRef.current.userCredentials?.userName || undefined,
+      });
     } else if (msg.type === 'projects_list') {
       setAvailableProjects(msg.projects);
       setProjectsBaseDir(msg.baseDir);
@@ -202,6 +224,39 @@ export function useRemoteSocket(onMessage: (msg: InboundMessage) => void) {
       setIsExecuting(true);
     } else if (msg.type === 'turn_end' || msg.type === 'turn_error' || msg.type === 'execution_aborted') {
       setIsExecuting(false);
+    } else if (msg.type === 'admin:repos_list') {
+      setBaseRepos(msg.repos);
+      setIsLoadingAdmin(false);
+    } else if (msg.type === 'admin:clone_repo_result') {
+      setIsLoadingAdmin(false);
+      setAdminActionStatus({
+        type: 'clone',
+        success: msg.success,
+        message: msg.success
+          ? `リポジトリ '${msg.repoName}' のクローンが完了しました`
+          : `クローンに失敗しました: ${msg.error || '不明なエラー'}`,
+        timestamp: Date.now(),
+      });
+      if (msg.success) {
+        sendFn({ type: 'admin:list_repos' });
+      }
+    } else if (msg.type === 'admin:workspaces_list') {
+      setWorkspaces(msg.workspaces);
+      setDiskStats(msg.diskStats);
+      setIsLoadingAdmin(false);
+    } else if (msg.type === 'admin:cleanup_workspace_result') {
+      setIsLoadingAdmin(false);
+      setAdminActionStatus({
+        type: 'cleanup',
+        success: msg.success,
+        message: msg.success
+          ? `ワークスペース '${msg.userName}' を削除しました`
+          : `削除に失敗しました: ${msg.error || '不明なエラー'}`,
+        timestamp: Date.now(),
+      });
+      if (msg.success) {
+        sendFn({ type: 'admin:list_workspaces' });
+      }
     }
 
     onMessageRef.current(msg);
@@ -574,7 +629,8 @@ export function useRemoteSocket(onMessage: (msg: InboundMessage) => void) {
     model?: string,
     engine?: AIEngine,
     reasoningEffort?: string,
-    attachments?: AttachmentItem[]
+    attachments?: AttachmentItem[],
+    credentials?: UserCredentials
   ) => {
     const payload: SendPromptMessage = {
       type: 'prompt',
@@ -587,13 +643,14 @@ export function useRemoteSocket(onMessage: (msg: InboundMessage) => void) {
       engine,
       reasoningEffort,
       attachments,
+      credentials: credentials || settings.userCredentials || undefined,
     };
     const ok = send(payload);
     if (ok) {
       setIsExecuting(true);
     }
     return ok;
-  }, [send, settings.defaultCwd, agentCwd]);
+  }, [send, settings.defaultCwd, settings.userCredentials, agentCwd]);
 
   const abort = useCallback(() => {
     return send({ type: 'abort' });
@@ -604,9 +661,13 @@ export function useRemoteSocket(onMessage: (msg: InboundMessage) => void) {
     setSettings(newSettings);
   }, []);
 
-  const requestProjects = useCallback((rootPath?: string) => {
-    return send({ type: 'list_projects', rootPath });
-  }, [send]);
+  const requestProjects = useCallback((rootPath?: string, userName?: string) => {
+    return send({
+      type: 'list_projects',
+      rootPath,
+      userName: userName || settings.userCredentials?.userName || undefined,
+    });
+  }, [send, settings.userCredentials?.userName]);
 
   const listSessions = useCallback((projectId?: string, cwd?: string) => {
     return send({ type: 'list_sessions', projectId, cwd });
@@ -634,6 +695,41 @@ export function useRemoteSocket(onMessage: (msg: InboundMessage) => void) {
     });
   }, [send]);
 
+  // --- Admin API アクション ---
+  const requestBaseRepos = useCallback(() => {
+    setIsLoadingAdmin(true);
+    return send({ type: 'admin:list_repos' });
+  }, [send]);
+
+  const requestWorkspaces = useCallback(() => {
+    setIsLoadingAdmin(true);
+    return send({ type: 'admin:list_workspaces' });
+  }, [send]);
+
+  const cloneBaseRepo = useCallback((
+    repoUrl: string,
+    deployToken?: string,
+    deployUser?: string,
+    name?: string
+  ) => {
+    setIsLoadingAdmin(true);
+    return send({
+      type: 'admin:clone_repo',
+      repoUrl,
+      deployToken,
+      deployUser,
+      name,
+    });
+  }, [send]);
+
+  const cleanupWorkspace = useCallback((userName: string) => {
+    setIsLoadingAdmin(true);
+    return send({
+      type: 'admin:cleanup_workspace',
+      userName,
+    });
+  }, [send]);
+
   return {
     settings,
     updateSettings,
@@ -653,5 +749,15 @@ export function useRemoteSocket(onMessage: (msg: InboundMessage) => void) {
     sendPrompt,
     abort,
     reconnect: connect,
+    // Admin 状態 & 関数
+    baseRepos,
+    workspaces,
+    diskStats,
+    isLoadingAdmin,
+    adminActionStatus,
+    requestBaseRepos,
+    requestWorkspaces,
+    cloneBaseRepo,
+    cleanupWorkspace,
   };
 }

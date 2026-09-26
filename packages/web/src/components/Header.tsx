@@ -1,5 +1,5 @@
 import React from 'react';
-import { Settings, History, Terminal, Wifi, WifiOff } from 'lucide-react';
+import { Settings, History, Terminal, Wifi, WifiOff, Server } from 'lucide-react';
 import { ActiveTransport } from '../types/protocol';
 
 interface HeaderProps {
@@ -12,6 +12,7 @@ interface HeaderProps {
   isExecuting: boolean;
   onOpenDrawer: () => void;
   onOpenSettings: () => void;
+  onOpenAdmin?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -24,6 +25,7 @@ export const Header: React.FC<HeaderProps> = ({
   isExecuting,
   onOpenDrawer,
   onOpenSettings,
+  onOpenAdmin,
 }) => {
   // CWDから最後のディレクトリ名のみを抽出して短縮表示
   const shortCwd = currentCwd ? currentCwd.split('/').filter(Boolean).pop() || currentCwd : 'Default';
@@ -119,6 +121,17 @@ export const Header: React.FC<HeaderProps> = ({
             {isAgentConnected ? "PC ON" : "PC OFF"}
           </span>
         </div>
+
+        {/* 共有EC2管理ボタン */}
+        {onOpenAdmin && (
+          <button
+            onClick={onOpenAdmin}
+            className="p-1.5 rounded-lg bg-slate-800 text-sky-400 hover:text-sky-300 hover:bg-slate-700 active:scale-95 transition-all"
+            title="共有EC2マルチテナント管理 (大元リポジトリ & メンバー利用状況)"
+          >
+            <Server className="w-5 h-5" />
+          </button>
+        )}
 
         {/* 設定ボタン */}
         <button

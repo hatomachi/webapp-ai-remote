@@ -1,5 +1,25 @@
 import React, { useState, useEffect } from 'react';
-import { X, Save, RotateCcw, ShieldCheck, Server, Folder, Radio, RefreshCw, Cpu, Plus, Trash2, ArrowUp, Type } from 'lucide-react';
+import {
+  X,
+  Save,
+  RotateCcw,
+  ShieldCheck,
+  Server,
+  Folder,
+  Radio,
+  RefreshCw,
+  Cpu,
+  Plus,
+  Trash2,
+  ArrowUp,
+  Type,
+  User,
+  Mail,
+  Key,
+  Eye,
+  EyeOff,
+  Lock,
+} from 'lucide-react';
 import { getDefaultSettings, SocketSettings, DEFAULT_AVAILABLE_MODELS } from '../hooks/useRemoteSocket';
 import { TransportMode } from '../types/protocol';
 
@@ -35,6 +55,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [newModel, setNewModel] = useState('');
   const [isClearingCache, setIsClearingCache] = useState(false);
   const [clearStatus, setClearStatus] = useState<string | null>(null);
+
+  // --- 個人プロファイル ＆ 認証トークン (Phase 3: 共有EC2マルチテナント) ---
+  const [userName, setUserName] = useState(currentSettings.userCredentials?.userName || '');
+  const [userEmail, setUserEmail] = useState(currentSettings.userCredentials?.userEmail || '');
+  const [copilotToken, setCopilotToken] = useState(currentSettings.userCredentials?.copilotToken || '');
+  const [claudeApiKey, setClaudeApiKey] = useState(currentSettings.userCredentials?.claudeApiKey || '');
+  const [gitlabToken, setGitlabToken] = useState(currentSettings.userCredentials?.gitlabToken || '');
+  const [showTokens, setShowTokens] = useState(false);
 
   useEffect(() => {
     setSelectedFontSize(fontSize);
@@ -74,6 +102,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       defaultCwd: defaultCwd.trim(),
       transportMode,
       availableModels: models.length > 0 ? models : [...DEFAULT_AVAILABLE_MODELS],
+      userCredentials: {
+        userName: userName.trim(),
+        userEmail: userEmail.trim(),
+        copilotToken: copilotToken.trim(),
+        claudeApiKey: claudeApiKey.trim(),
+        gitlabToken: gitlabToken.trim(),
+      },
     });
     onClose();
   };
@@ -87,6 +122,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setModels([...DEFAULT_AVAILABLE_MODELS]);
     setSelectedFontSize(15);
     onChangeFontSize?.(15);
+    setUserName('');
+    setUserEmail('');
+    setCopilotToken('');
+    setClaudeApiKey('');
+    setGitlabToken('');
   };
 
   const handleClearCache = async () => {
@@ -185,6 +225,106 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             <p className="text-[10px] text-slate-500 mt-1">
               会社PCの起動ログに表示されたUUIDを入力するか、表示されたURLをスマホで開くと自動入力されます
             </p>
+          </div>
+
+          {/* 個人プロファイル ＆ 認証情報 (共有EC2マルチテナント) */}
+          <div className="p-3 rounded-xl bg-slate-950/60 border border-slate-800 space-y-3">
+            <div className="flex items-center justify-between pb-1.5 border-b border-slate-800/80">
+              <div className="flex items-center space-x-1.5">
+                <User className="w-4 h-4 text-emerald-400" />
+                <span className="font-semibold text-slate-200 text-xs">個人プロファイル ＆ 認証情報</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowTokens(!showTokens)}
+                className="flex items-center space-x-1 text-[10px] text-slate-400 hover:text-emerald-300 transition-colors"
+                title={showTokens ? 'トークンを伏字にする' : 'トークンを表示する'}
+              >
+                {showTokens ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                <span>{showTokens ? '伏字にする' : '表示する'}</span>
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
+              {/* メンバー名 */}
+              <div>
+                <label className="block text-slate-400 font-medium mb-1 flex items-center space-x-1">
+                  <User className="w-3 h-3 text-emerald-400" />
+                  <span>メンバー名</span>
+                </label>
+                <input
+                  type="text"
+                  value={userName}
+                  onChange={(e) => setUserName(e.target.value)}
+                  placeholder="例: taro-tanaka"
+                  className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-slate-100 font-mono text-xs outline-none focus:border-emerald-500 transition-colors"
+                />
+              </div>
+
+              {/* メールアドレス */}
+              <div>
+                <label className="block text-slate-400 font-medium mb-1 flex items-center space-x-1">
+                  <Mail className="w-3 h-3 text-emerald-400" />
+                  <span>メールアドレス</span>
+                </label>
+                <input
+                  type="email"
+                  value={userEmail}
+                  onChange={(e) => setUserEmail(e.target.value)}
+                  placeholder="例: user@internal"
+                  className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-slate-100 font-mono text-xs outline-none focus:border-emerald-500 transition-colors"
+                />
+              </div>
+            </div>
+
+            {/* GitHub PAT / Copilot Token */}
+            <div>
+              <label className="block text-slate-400 font-medium mb-1 flex items-center space-x-1">
+                <Key className="w-3 h-3 text-sky-400" />
+                <span>GitHub / Copilot Token (GH_TOKEN)</span>
+              </label>
+              <input
+                type={showTokens ? 'text' : 'password'}
+                value={copilotToken}
+                onChange={(e) => setCopilotToken(e.target.value)}
+                placeholder="ghp_xxxxxxxxxxxxxxxxxxxx"
+                className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-slate-100 font-mono text-xs outline-none focus:border-sky-500 transition-colors"
+              />
+            </div>
+
+            {/* Claude API Key */}
+            <div>
+              <label className="block text-slate-400 font-medium mb-1 flex items-center space-x-1">
+                <Lock className="w-3 h-3 text-purple-400" />
+                <span>Claude API Key (ANTHROPIC_API_KEY)</span>
+              </label>
+              <input
+                type={showTokens ? 'text' : 'password'}
+                value={claudeApiKey}
+                onChange={(e) => setClaudeApiKey(e.target.value)}
+                placeholder="sk-ant-xxxxxxxxxxxxxxxxxxxx"
+                className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-slate-100 font-mono text-xs outline-none focus:border-purple-500 transition-colors"
+              />
+            </div>
+
+            {/* GitLab Private Token */}
+            <div>
+              <label className="block text-slate-400 font-medium mb-1 flex items-center space-x-1">
+                <Key className="w-3 h-3 text-amber-400" />
+                <span>GitLab Private Token (任意)</span>
+              </label>
+              <input
+                type={showTokens ? 'text' : 'password'}
+                value={gitlabToken}
+                onChange={(e) => setGitlabToken(e.target.value)}
+                placeholder="glpat-xxxxxxxxxxxxxxxxxxxx"
+                className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-slate-100 font-mono text-xs outline-none focus:border-amber-500 transition-colors"
+              />
+            </div>
+
+            <div className="p-2 rounded-lg bg-emerald-950/30 border border-emerald-800/40 text-[10px] text-emerald-300 leading-relaxed">
+              🛡️ <strong>安全保護</strong>: トークンや名義はEC2上に一切保存されず、あなたのスマホ（localStorage）にのみ安全に保存されます。プロンプト実行時にのみ一時プロセス環境変数へ注入されます。
+            </div>
           </div>
 
           {/* デフォルト CWD */}

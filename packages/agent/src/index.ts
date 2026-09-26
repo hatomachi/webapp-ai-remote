@@ -16,9 +16,6 @@ import {
 import { CopilotTurnRunner } from './copilotRunner.js';
 import { WorkspaceManager, UserCredentials } from './workspaceManager.js';
 
-const copilotRunner = new CopilotTurnRunner();
-const workspaceManager = new WorkspaceManager();
-
 // .env ファイルの自動読み込み (Node 20+ 標準機能 or 簡易パーサー)
 function loadEnv() {
   const envPaths = [
@@ -53,6 +50,9 @@ function loadEnv() {
   }
 }
 loadEnv();
+
+const workspaceManager = new WorkspaceManager();
+const copilotRunner = new CopilotTurnRunner({ sandboxManager: workspaceManager.sandboxManager });
 
 const isWindows = process.platform === 'win32';
 
@@ -681,6 +681,7 @@ async function executeCopilotTurn(params: {
     model: params.model,
     reasoningEffort: params.reasoningEffort,
     credentials: params.credentials,
+    sandboxManager: workspaceManager.sandboxManager,
     onSendToHub: (msg) => {
       // turn_start メッセージに attachments を付与して Hub 経由で PWA へ通知
       if (msg.type === 'turn_start' && savedAttachments.length > 0) {
@@ -815,11 +816,25 @@ async function executeClaudeTurn(params: {
       toolUses: [],
     };
 
-    const child = spawn(CLAUDE_BIN, args, {
-      cwd: workDir,
-      env: workspaceManager.buildChildProcessEnv(params.credentials),
-      stdio: ['pipe', 'pipe', 'pipe'],
-      shell: isWindows
+    const childEnv = workspaceManager.buildChildProcessEnv(params.credentials);
+    const sandboxConfig = workspaceManager.sandboxManager.getSandboxSpawnConfig(
+      CLAUDE_BIN,
+      args,
+      {
+        cwd: workDir,
+        env: childEnv,
+        userName: params.credentials?.userName,
+        isWindows
+      }
+    );
+
+    if (sandboxConfig.isSandboxed) {
+      console.log(`[Agent] 🛡️ Running Claude Code in OS sandbox user: ${sandboxConfig.osUser} (method: ${sandboxConfig.methodUsed})`);
+    }
+
+    const child = spawn(sandboxConfig.command, sandboxConfig.args, {
+      ...sandboxConfig.spawnOptions,
+      stdio: ['pipe', 'pipe', 'pipe']
     });
 
     // EPIPE 防止: 子プロセスが即座に終了した際の未捕捉例外クラッシュを防止

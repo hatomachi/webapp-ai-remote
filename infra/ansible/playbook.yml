@@ -12,9 +12,13 @@
     app_user: "{{ ansible_env.SUDO_USER | default(ansible_user_id) }}"
     is_container: "{{ ansible_virtualization_type in ['docker', 'containerd', 'podman'] or (ansible_is_chroot | default(false)) }}"
     hub_url: "ws://localhost:8090/ws/agent"
+    enable_user_sandbox: true
+    sandbox_user_prefix: "ai-"
+    sandbox_shared_group: "ai-shared"
 
   roles:
     - common
-    - docker
+    - role: docker
+      when: not is_container
     - ai_tools
     - webapp_remote

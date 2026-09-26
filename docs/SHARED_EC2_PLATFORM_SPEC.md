@@ -155,7 +155,7 @@ export interface AdminCleanupWorkspaceMessage {
 
 - **実行方式**: 素のEC2上で `ansible-playbook -i localhost, -c local playbook.yml`（ローカル実行モード）
 - **Roles構成**:
-  - `roles/common`: `git`, `ripgrep`, `curl`, `jq`, `tmux`, `cron` のインストール
+  - `roles/common`: `git`, `ripgrep`, `curl`, `jq`, `tmux`, `cron`, `sudo` のインストール
   - `roles/docker`: Docker ＆ Docker Compose の導入
   - `roles/ai_tools`: Node.js 20 LTS, Claude Code CLI, Copilot CLI
   - `roles/webapp_remote`:
@@ -163,3 +163,24 @@ export interface AdminCleanupWorkspaceMessage {
     - 定期 `git fetch` cron ジョブ登録
     - Nginx ＆ Hub コンテナ起動（Docker Compose）
     - Agent サービスの起動（systemd unit）
+    - 共有グループ（`ai-shared`）および権限降格用 `sudoers` 設定（`/etc/sudoers.d/webapp-ai-remote`）
+
+---
+
+## 6. 🔒 Linuxユーザー分離 ＆ ワークスペース権限サンドボックス（Phase 4）
+
+### ① 脅威モデルと分離の必要性
+- 共有EC2上で複数メンバーが同時にAI CLI（Claude Code / Copilot CLI）を実行する際、AIのBash実行ツールにより他人のワークスペースを閲覧・改ざんしたり、ホストOSを侵害するリスクを排除する。
+
+### ② アーキテクチャと実装方針
+1. **OSユーザー自動マッピング**:
+   - メンバー名（例: `Taro Tanaka`）に基づき、一意な非特権Linuxユーザー（例: `ai-taro-tanaka`）を自動マッピング・生成（POSIX規格準拠、最大32文字、英数字・ハイフン）。
+   - 共通グループ `ai-shared` に所属させ、大元リポジトリ（`base-repos`）への読み取り権限（Read-only）を確保。
+2. **ワークスペース権限サンドボックス (`chmod 700`)**:
+   - 各メンバーの作業ツリー `/data/workspaces/<user>` は所有者を `ai-<user>` に設定し、パーミッションを `chmod 700`（所有者のみアクセス可能）に制限。
+   - 他メンバー（`ai-sato`）からは `taro-tanaka` のワークスペースはディレクトリ進入すら拒否（`Permission denied`）され、物理的に完全隔離。
+3. **AIプロセスのサンドボックス起動**:
+   - Agent（管理デーモン）から AI CLI を `spawn` する際、`sudo -u <osUser> -H -E ...` または `spawn` の `uid`/`gid` オプションにより、非特権 OS ユーザー権限に降格して実行。
+   - `HOME=/home/<osUser>`, `USER=<osUser>` を設定し、AI CLI の設定・キャッシュ（`~/.claude/`, `~/.copilot/`）もメンバーごとに完全分離。
+   - 非Linux環境（macOS/Windows）やサンドボックス無効時は、安全に通常実行へフォールバック（Graceful Fallback）。
+

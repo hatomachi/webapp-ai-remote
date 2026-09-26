@@ -19,6 +19,7 @@
       - ripgrep
       - cron
       - build-essential
+      - sudo
     state: present
   when: ansible_os_family == "Debian"
 
@@ -33,6 +34,7 @@
       - tar
       - ca-certificates
       - cronie
+      - sudo
     state: present
   when: ansible_os_family == "RedHat"
 

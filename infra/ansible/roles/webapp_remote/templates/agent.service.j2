@@ -12,6 +12,9 @@ Environment=NODE_ENV=production
 Environment=BASE_DATA_DIR={{ base_data_dir }}
 Environment=DEFAULT_CWD={{ workspaces_dir }}
 Environment=HUB_URL={{ hub_url }}
+Environment=ENABLE_USER_SANDBOX={{ 'true' if (enable_user_sandbox | default(true)) else 'false' }}
+Environment=SANDBOX_USER_PREFIX={{ sandbox_user_prefix | default('ai-') }}
+Environment=SANDBOX_SHARED_GROUP={{ sandbox_shared_group | default('ai-shared') }}
 ExecStart=/usr/bin/npm run dev
 Restart=always
 RestartSec=5

@@ -6,6 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { createInterface } from 'node:readline';
 import { ChatMessage, ToolUseItem, saveSessionHistory, getSessionMessages } from './sessionManager.js';
 import { UserCredentials } from './workspaceManager.js';
+import { SandboxManager } from './sandboxManager.js';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -104,6 +105,7 @@ export interface ExecuteCopilotParams {
   model?: string;
   reasoningEffort?: string;
   credentials?: UserCredentials;
+  sandboxManager?: SandboxManager;
   onSendToHub: (msg: any) => void;
   onTurnEnd: () => void;
 }
@@ -111,10 +113,12 @@ export interface ExecuteCopilotParams {
 export class CopilotTurnRunner {
   private currentChild: ChildProcess | null = null;
   private readonly copilotBin: string;
+  public sandboxManager?: SandboxManager;
 
-  constructor() {
+  constructor(options?: { sandboxManager?: SandboxManager }) {
     const resolved = resolveCopilotBin();
     this.copilotBin = resolved.binPath;
+    this.sandboxManager = options?.sandboxManager;
     console.log(`[CopilotRunner] Initialized. Binary: ${this.copilotBin} (${resolved.status})`);
   }
 
@@ -256,12 +260,35 @@ export class CopilotTurnRunner {
       }
     }
 
-    const child = spawn(this.copilotBin, args, {
+    const sandbox = params.sandboxManager || this.sandboxManager;
+    let spawnCmd = this.copilotBin;
+    let spawnArgs = args;
+    let spawnOpts: any = {
       cwd: workDir,
       env: childEnv,
       stdio: ['pipe', 'pipe', 'pipe'],
       shell: isWindows
-    });
+    };
+
+    if (sandbox && sandbox.enabled) {
+      const sandboxConfig = sandbox.getSandboxSpawnConfig(this.copilotBin, args, {
+        cwd: workDir,
+        env: childEnv,
+        userName: params.credentials?.userName,
+        isWindows
+      });
+      spawnCmd = sandboxConfig.command;
+      spawnArgs = sandboxConfig.args;
+      spawnOpts = {
+        ...sandboxConfig.spawnOptions,
+        stdio: ['pipe', 'pipe', 'pipe']
+      };
+      if (sandboxConfig.isSandboxed) {
+        console.log(`[CopilotRunner] 🛡️ Running GitHub Copilot CLI in OS sandbox user: ${sandboxConfig.osUser} (method: ${sandboxConfig.methodUsed})`);
+      }
+    }
+
+    const child = spawn(spawnCmd, spawnArgs, spawnOpts);
 
     this.currentChild = child;
     let hasOutput = false;

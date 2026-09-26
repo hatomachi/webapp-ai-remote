@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { execSync } from 'node:child_process';
+import { SandboxManager, SandboxManagerOptions } from './sandboxManager.js';
 
 export interface UserCredentials {
   userName?: string;
@@ -46,15 +47,24 @@ export interface DiskStats {
   freeBytes: number;
 }
 
+export interface WorkspaceManagerOptions {
+  baseReposDir?: string;
+  workspacesDir?: string;
+  sandboxManager?: SandboxManager;
+  sandboxOptions?: SandboxManagerOptions;
+}
+
 export class WorkspaceManager {
   public readonly baseReposDir: string;
   public readonly workspacesDir: string;
   public readonly isMultiTenant: boolean;
+  public readonly sandboxManager: SandboxManager;
 
-  constructor(options?: { baseReposDir?: string; workspacesDir?: string }) {
+  constructor(options?: WorkspaceManagerOptions) {
     const defaultDataDir = process.env.BASE_DATA_DIR || '/data';
     this.baseReposDir = options?.baseReposDir || process.env.BASE_REPOS_DIR || path.join(defaultDataDir, 'base-repos');
     this.workspacesDir = options?.workspacesDir || process.env.WORKSPACES_DIR || path.join(defaultDataDir, 'workspaces');
+    this.sandboxManager = options?.sandboxManager || new SandboxManager(options?.sandboxOptions);
 
     // マルチテナントモードの判定: baseReposDir が存在するか、明示的に MULTI_TENANT=true の場合
     const envExplicit = process.env.MULTI_TENANT === 'true';
@@ -97,6 +107,8 @@ export class WorkspaceManager {
     userWorkspaceDir: string;
     sanitizedUser: string;
     worktrees: WorktreeInfo[];
+    osUser?: string;
+    isSandboxed: boolean;
   } {
     const sanitizedUser = this.sanitizeUserName(userName);
     const userWorkspaceDir = path.join(this.workspacesDir, sanitizedUser);
@@ -108,28 +120,23 @@ export class WorkspaceManager {
 
     const worktrees: WorktreeInfo[] = [];
 
-    // base-repos ディレクトリが存在しない場合は worktree 生成をスキップ
-    if (!fs.existsSync(this.baseReposDir)) {
-      return { userWorkspaceDir, sanitizedUser, worktrees };
-    }
+    // base-repos ディレクトリが存在する場合のみ Git リポジトリを走査して worktree を生成
+    if (fs.existsSync(this.baseReposDir)) {
+      let entries: fs.Dirent[] = [];
+      try {
+        entries = fs.readdirSync(this.baseReposDir, { withFileTypes: true });
+      } catch (err: any) {
+        console.warn(`[WorkspaceManager] Failed to read baseReposDir (${this.baseReposDir}):`, err.message);
+      }
 
-    // base-repos 配下の Git リポジトリを走査
-    let entries: fs.Dirent[] = [];
-    try {
-      entries = fs.readdirSync(this.baseReposDir, { withFileTypes: true });
-    } catch (err: any) {
-      console.warn(`[WorkspaceManager] Failed to read baseReposDir (${this.baseReposDir}):`, err.message);
-      return { userWorkspaceDir, sanitizedUser, worktrees };
-    }
+      const branchName = `user/${sanitizedUser}`;
 
-    const branchName = `user/${sanitizedUser}`;
-
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
-      const repoName = entry.name;
-      const baseRepoPath = path.join(this.baseReposDir, repoName);
-      const isGit = fs.existsSync(path.join(baseRepoPath, '.git')) || fs.existsSync(path.join(baseRepoPath, 'HEAD'));
-      if (!isGit) continue;
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        const repoName = entry.name;
+        const baseRepoPath = path.join(this.baseReposDir, repoName);
+        const isGit = fs.existsSync(path.join(baseRepoPath, '.git')) || fs.existsSync(path.join(baseRepoPath, 'HEAD'));
+        if (!isGit) continue;
 
       const targetPath = path.join(userWorkspaceDir, repoName);
 
@@ -188,6 +195,7 @@ export class WorkspaceManager {
         });
       }
     }
+  }
 
     // ワークスペース直下に AGENTS.md がなければ自動生成
     const agentsMdPath = path.join(userWorkspaceDir, 'AGENTS.md');
@@ -200,10 +208,22 @@ export class WorkspaceManager {
       }
     }
 
+    // サンドボックス権限の適用（OSユーザー確保 & chmod 700 & chown）
+    let osUser: string | undefined;
+    let isSandboxed = false;
+    if (this.sandboxManager.enabled) {
+      osUser = this.sandboxManager.mapToOsUser(sanitizedUser);
+      this.sandboxManager.ensureOsUser(osUser);
+      this.sandboxManager.applyWorkspacePermissions(userWorkspaceDir, osUser);
+      isSandboxed = true;
+    }
+
     return {
       userWorkspaceDir,
       sanitizedUser,
-      worktrees
+      worktrees,
+      osUser,
+      isSandboxed
     };
   }
 
@@ -486,8 +506,18 @@ ${repoList}
         }
       }
 
-      // 2. ディレクトリ全体を削除
-      fs.rmSync(userWorkspaceDir, { recursive: true, force: true });
+      // 2. ディレクトリ全体を削除（権限制限がある場合は sudo rm -rf にフォールバック）
+      try {
+        fs.rmSync(userWorkspaceDir, { recursive: true, force: true });
+      } catch (rmErr: any) {
+        if (process.platform === 'linux') {
+          const isRoot = process.getuid && process.getuid() === 0;
+          const sudoPrefix = isRoot ? '' : 'sudo ';
+          execSync(`${sudoPrefix}rm -rf "${userWorkspaceDir}"`, { stdio: 'pipe' });
+        } else {
+          throw rmErr;
+        }
+      }
       console.log(`[WorkspaceManager] Cleaned up workspace for ${sanitized} at: ${userWorkspaceDir}`);
       return { success: true, userName: sanitized };
     } catch (err: any) {

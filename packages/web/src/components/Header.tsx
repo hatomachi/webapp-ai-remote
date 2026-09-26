@@ -13,6 +13,7 @@ interface HeaderProps {
   onOpenDrawer: () => void;
   onOpenSettings: () => void;
   onOpenAdmin?: () => void;
+  showAdminButton?: boolean;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -26,6 +27,7 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenDrawer,
   onOpenSettings,
   onOpenAdmin,
+  showAdminButton = true,
 }) => {
   // CWDから最後のディレクトリ名のみを抽出して短縮表示
   const shortCwd = currentCwd ? currentCwd.split('/').filter(Boolean).pop() || currentCwd : 'Default';
@@ -122,8 +124,8 @@ export const Header: React.FC<HeaderProps> = ({
           </span>
         </div>
 
-        {/* 共有EC2管理ボタン */}
-        {onOpenAdmin && (
+        {/* 共有EC2管理ボタン (Admin Token が設定されている場合のみ表示) */}
+        {showAdminButton && onOpenAdmin && (
           <button
             onClick={onOpenAdmin}
             className="p-1.5 rounded-lg bg-slate-800 text-sky-400 hover:text-sky-300 hover:bg-slate-700 active:scale-95 transition-all"

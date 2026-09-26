@@ -25,6 +25,7 @@ export const DEFAULT_AVAILABLE_MODELS = [
 export interface SocketSettings {
   hubUrl: string;
   authToken: string;
+  adminToken?: string;
   defaultCwd: string;
   transportMode?: TransportMode;
   availableModels?: string[];
@@ -59,6 +60,7 @@ export function getDefaultSettings(): SocketSettings {
   return {
     hubUrl: defaultHubUrl,
     authToken: '',
+    adminToken: '',
     defaultCwd: '',
     transportMode: 'auto',
     availableModels: [...DEFAULT_AVAILABLE_MODELS],
@@ -254,8 +256,17 @@ export function useRemoteSocket(onMessage: (msg: InboundMessage) => void) {
     } else if (msg.type === 'turn_end' || msg.type === 'turn_error' || msg.type === 'execution_aborted') {
       setIsExecuting(false);
     } else if (msg.type === 'admin:repos_list') {
-      setBaseRepos(msg.repos);
       setIsLoadingAdmin(false);
+      if (msg.error) {
+        setAdminActionStatus({
+          type: 'clone',
+          success: false,
+          message: msg.error,
+          timestamp: Date.now(),
+        });
+      } else {
+        setBaseRepos(msg.repos || []);
+      }
     } else if (msg.type === 'admin:clone_repo_result') {
       setIsLoadingAdmin(false);
       setAdminActionStatus({
@@ -267,24 +278,33 @@ export function useRemoteSocket(onMessage: (msg: InboundMessage) => void) {
         timestamp: Date.now(),
       });
       if (msg.success) {
-        sendFn({ type: 'admin:list_repos' });
+        sendFn({ type: 'admin:list_repos', adminToken: settingsRef.current.adminToken });
       }
     } else if (msg.type === 'admin:workspaces_list') {
-      setWorkspaces(msg.workspaces);
-      setDiskStats(msg.diskStats);
       setIsLoadingAdmin(false);
+      if (msg.error) {
+        setAdminActionStatus({
+          type: 'cleanup',
+          success: false,
+          message: msg.error,
+          timestamp: Date.now(),
+        });
+      } else {
+        setWorkspaces(msg.workspaces || []);
+        setDiskStats(msg.diskStats || null);
+      }
     } else if (msg.type === 'admin:cleanup_workspace_result') {
       setIsLoadingAdmin(false);
       setAdminActionStatus({
         type: 'cleanup',
         success: msg.success,
         message: msg.success
-          ? `ワークスペース '${msg.userName}' を削除しました`
-          : `削除に失敗しました: ${msg.error || '不明なエラー'}`,
+          ? `ワークスペース '${msg.userName}' を削除・初期化しました`
+          : `削除・初期化に失敗しました: ${msg.error || '不明なエラー'}`,
         timestamp: Date.now(),
       });
       if (msg.success) {
-        sendFn({ type: 'admin:list_workspaces' });
+        sendFn({ type: 'admin:list_workspaces', adminToken: settingsRef.current.adminToken });
       }
     }
 
@@ -735,37 +755,45 @@ export function useRemoteSocket(onMessage: (msg: InboundMessage) => void) {
   }, [send]);
 
   // --- Admin API アクション ---
-  const requestBaseRepos = useCallback(() => {
+  const requestBaseRepos = useCallback((adminToken?: string) => {
     setIsLoadingAdmin(true);
-    return send({ type: 'admin:list_repos' });
+    const token = adminToken || settingsRef.current.adminToken;
+    return send({ type: 'admin:list_repos', adminToken: token });
   }, [send]);
 
-  const requestWorkspaces = useCallback(() => {
+  const requestWorkspaces = useCallback((adminToken?: string) => {
     setIsLoadingAdmin(true);
-    return send({ type: 'admin:list_workspaces' });
+    const token = adminToken || settingsRef.current.adminToken;
+    return send({ type: 'admin:list_workspaces', adminToken: token });
   }, [send]);
 
   const cloneBaseRepo = useCallback((
     repoUrl: string,
     deployToken?: string,
     deployUser?: string,
-    name?: string
+    name?: string,
+    adminToken?: string
   ) => {
     setIsLoadingAdmin(true);
+    const token = adminToken || settingsRef.current.adminToken;
     return send({
       type: 'admin:clone_repo',
       repoUrl,
       deployToken,
       deployUser,
       name,
+      adminToken: token,
     });
   }, [send]);
 
-  const cleanupWorkspace = useCallback((userName: string) => {
+  const cleanupWorkspace = useCallback((userName: string, adminToken?: string) => {
     setIsLoadingAdmin(true);
+    const token = adminToken || settingsRef.current.adminToken;
     return send({
       type: 'admin:cleanup_workspace',
       userName,
+      adminToken: token,
+      credentials: settingsRef.current.userCredentials,
     });
   }, [send]);
 

@@ -133,6 +133,8 @@ export interface AdminRepoItem {
 export interface AdminReposListMessage {
   type: 'admin:repos_list';
   repos: AdminRepoItem[];
+  success?: boolean;
+  error?: string;
   timestamp: string;
 }
 
@@ -168,6 +170,8 @@ export interface AdminWorkspacesListMessage {
   type: 'admin:workspaces_list';
   workspaces: WorkspaceItem[];
   diskStats: DiskStats;
+  success?: boolean;
+  error?: string;
   timestamp: string;
 }
 
@@ -261,6 +265,7 @@ export interface ToolApprovalResponseMessage {
 
 export interface AdminListReposMessage {
   type: 'admin:list_repos';
+  adminToken?: string;
 }
 
 export interface AdminCloneRepoMessage {
@@ -269,15 +274,19 @@ export interface AdminCloneRepoMessage {
   deployToken?: string;
   deployUser?: string;
   name?: string;
+  adminToken?: string;
 }
 
 export interface AdminListWorkspacesMessage {
   type: 'admin:list_workspaces';
+  adminToken?: string;
 }
 
 export interface AdminCleanupWorkspaceMessage {
   type: 'admin:cleanup_workspace';
   userName: string;
+  adminToken?: string;
+  credentials?: UserCredentials;
 }
 
 export type OutboundMessage = (

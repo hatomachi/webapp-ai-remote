@@ -19,6 +19,10 @@ import {
   Eye,
   EyeOff,
   Lock,
+  ChevronDown,
+  ChevronRight,
+  AlertTriangle,
+  Shield,
 } from 'lucide-react';
 import { getDefaultSettings, SocketSettings, DEFAULT_AVAILABLE_MODELS } from '../hooks/useRemoteSocket';
 import { TransportMode } from '../types/protocol';
@@ -28,6 +32,7 @@ interface SettingsModalProps {
   onClose: () => void;
   currentSettings: SocketSettings;
   onSave: (settings: SocketSettings) => void;
+  onResetMyWorkspace?: (userName: string) => void;
   fontSize?: number;
   onChangeFontSize?: (size: number) => void;
 }
@@ -37,11 +42,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onClose,
   currentSettings,
   onSave,
+  onResetMyWorkspace,
   fontSize = 15,
   onChangeFontSize,
 }) => {
   const [hubUrl, setHubUrl] = useState(currentSettings.hubUrl);
   const [authToken, setAuthToken] = useState(currentSettings.authToken);
+  const [adminToken, setAdminToken] = useState(currentSettings.adminToken || '');
   const [defaultCwd, setDefaultCwd] = useState(currentSettings.defaultCwd);
   const [transportMode, setTransportMode] = useState<TransportMode>(
     currentSettings.transportMode || 'auto'
@@ -63,6 +70,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [claudeApiKey, setClaudeApiKey] = useState(currentSettings.userCredentials?.claudeApiKey || '');
   const [gitlabToken, setGitlabToken] = useState(currentSettings.userCredentials?.gitlabToken || '');
   const [showTokens, setShowTokens] = useState(false);
+
+  // --- Phase 5-2: 管理者設定アコーディオン & ワークスペース自己初期化 ---
+  const [isAdminAccordionOpen, setIsAdminAccordionOpen] = useState(Boolean(currentSettings.adminToken));
+  const [isConfirmingResetWorkspace, setIsConfirmingResetWorkspace] = useState(false);
 
   useEffect(() => {
     setSelectedFontSize(fontSize);
@@ -99,6 +110,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     onSave({
       hubUrl: hubUrl.trim(),
       authToken: authToken.trim(),
+      adminToken: adminToken.trim(),
       defaultCwd: defaultCwd.trim(),
       transportMode,
       availableModels: models.length > 0 ? models : [...DEFAULT_AVAILABLE_MODELS],
@@ -117,6 +129,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     const def = getDefaultSettings();
     setHubUrl(def.hubUrl);
     setAuthToken(def.authToken);
+    setAdminToken('');
     setDefaultCwd(def.defaultCwd);
     setTransportMode(def.transportMode || 'auto');
     setModels([...DEFAULT_AVAILABLE_MODELS]);
@@ -127,6 +140,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setCopilotToken('');
     setClaudeApiKey('');
     setGitlabToken('');
+    setIsAdminAccordionOpen(false);
+    setIsConfirmingResetWorkspace(false);
   };
 
   const handleClearCache = async () => {
@@ -325,6 +340,101 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             <div className="p-2 rounded-lg bg-emerald-950/30 border border-emerald-800/40 text-[10px] text-emerald-300 leading-relaxed">
               🛡️ <strong>安全保護</strong>: トークンや名義はEC2上に一切保存されず、あなたのスマホ（localStorage）にのみ安全に保存されます。プロンプト実行時にのみ一時プロセス環境変数へ注入されます。
             </div>
+
+            {/* ワークスペース自己初期化 (Git Worktree リセット) */}
+            {onResetMyWorkspace && userName.trim() && (
+              <div className="pt-2 border-t border-slate-800/80">
+                {!isConfirmingResetWorkspace ? (
+                  <button
+                    type="button"
+                    onClick={() => setIsConfirmingResetWorkspace(true)}
+                    className="w-full flex items-center justify-center space-x-1.5 py-1.5 px-3 rounded-lg bg-slate-900 hover:bg-rose-950/30 border border-slate-800 hover:border-rose-800/50 text-slate-400 hover:text-rose-300 text-xs transition-colors"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    <span>マイスペースを初期化 (Worktree リセット)</span>
+                  </button>
+                ) : (
+                  <div className="p-2.5 rounded-lg bg-rose-950/40 border border-rose-800/60 space-y-2">
+                    <div className="flex items-start space-x-1.5 text-rose-200 text-xs">
+                      <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                      <div className="leading-tight">
+                        <strong className="block text-rose-300 mb-0.5">ワークスペース初期化の確認</strong>
+                        <span>
+                          <code>{userName.trim()}</code> の作業領域をクリーンアップし、大元から worktree を再生成します。個人ブランチの未コミット作業は失われます。
+                        </span>
+                      </div>
+                    </div>
+                    <div className="flex items-center justify-end space-x-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => setIsConfirmingResetWorkspace(false)}
+                        className="px-2.5 py-1 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs transition-colors"
+                      >
+                        キャンセル
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onResetMyWorkspace(userName.trim());
+                          setIsConfirmingResetWorkspace(false);
+                          onClose();
+                        }}
+                        className="px-2.5 py-1 rounded-md bg-rose-600 hover:bg-rose-500 text-white font-medium text-xs shadow transition-colors"
+                      >
+                        初期化を実行する
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* 管理者設定 (Admin Token) アコーディオン */}
+          <div className="border border-slate-800 rounded-xl overflow-hidden bg-slate-950/40">
+            <button
+              type="button"
+              onClick={() => setIsAdminAccordionOpen(!isAdminAccordionOpen)}
+              className="w-full flex items-center justify-between p-3 text-left hover:bg-slate-900/60 transition-colors"
+            >
+              <div className="flex items-center space-x-2">
+                <Shield className="w-4 h-4 text-sky-400" />
+                <span className="font-semibold text-slate-200 text-xs">管理者設定 (Admin Token)</span>
+                {adminToken.trim() ? (
+                  <span className="text-[9px] bg-sky-500/20 text-sky-300 border border-sky-500/40 px-1.5 py-0.5 rounded font-mono">
+                    設定済み
+                  </span>
+                ) : (
+                  <span className="text-[10px] text-slate-500 font-normal">任意</span>
+                )}
+              </div>
+              {isAdminAccordionOpen ? (
+                <ChevronDown className="w-4 h-4 text-slate-400" />
+              ) : (
+                <ChevronRight className="w-4 h-4 text-slate-400" />
+              )}
+            </button>
+
+            {isAdminAccordionOpen && (
+              <div className="p-3 pt-0 border-t border-slate-800/60 space-y-2 mt-2">
+                <div>
+                  <label className="block text-slate-400 font-medium mb-1 flex items-center space-x-1">
+                    <Key className="w-3 h-3 text-sky-400" />
+                    <span>管理者トークン (ADMIN_TOKEN)</span>
+                  </label>
+                  <input
+                    type={showTokens ? 'text' : 'password'}
+                    value={adminToken}
+                    onChange={(e) => setAdminToken(e.target.value)}
+                    placeholder="EC2側 .env で設定した ADMIN_TOKEN"
+                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-slate-100 font-mono text-xs outline-none focus:border-sky-500 transition-colors"
+                  />
+                </div>
+                <p className="text-[10px] text-slate-500 leading-relaxed">
+                  管理者トークンを設定すると、ヘッダーに「共有EC2マルチテナント管理」ボタンが表示され、大元リポジトリのcloneや全メンバーの利用状況一覧・強制クリーンアップが可能になります。
+                </p>
+              </div>
+            )}
           </div>
 
           {/* デフォルト CWD */}

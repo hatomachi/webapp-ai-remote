@@ -1020,6 +1020,7 @@ export function App() {
         onOpenDrawer={() => setIsDrawerOpen(true)}
         onOpenSettings={() => setIsSettingsOpen(true)}
         onOpenAdmin={() => setIsAdminDrawerOpen(true)}
+        showAdminButton={Boolean(settings.adminToken?.trim())}
       />
 
       {/* ツール承認待ち通知バナー */}
@@ -1321,6 +1322,7 @@ export function App() {
         onClose={() => setIsSettingsOpen(false)}
         currentSettings={settings}
         onSave={updateSettings}
+        onResetMyWorkspace={(user) => cleanupWorkspace(user)}
         fontSize={fontSize}
         onChangeFontSize={handleSelectFontSize}
       />
@@ -1339,6 +1341,7 @@ export function App() {
         onCloneBaseRepo={cloneBaseRepo}
         onCleanupWorkspace={cleanupWorkspace}
         isAgentConnected={isAgentConnected}
+        adminToken={settings.adminToken}
       />
     </div>
   );

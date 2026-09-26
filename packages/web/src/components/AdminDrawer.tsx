@@ -33,11 +33,12 @@ interface AdminDrawerProps {
     message: string;
     timestamp: number;
   } | null;
-  onRequestBaseRepos: () => void;
-  onRequestWorkspaces: () => void;
-  onCloneBaseRepo: (repoUrl: string, deployToken?: string, deployUser?: string, name?: string) => void;
-  onCleanupWorkspace: (userName: string) => void;
+  onRequestBaseRepos: (adminToken?: string) => void;
+  onRequestWorkspaces: (adminToken?: string) => void;
+  onCloneBaseRepo: (repoUrl: string, deployToken?: string, deployUser?: string, name?: string, adminToken?: string) => void;
+  onCleanupWorkspace: (userName: string, adminToken?: string) => void;
   isAgentConnected: boolean;
+  adminToken?: string;
 }
 
 export const AdminDrawer: React.FC<AdminDrawerProps> = ({
@@ -53,6 +54,7 @@ export const AdminDrawer: React.FC<AdminDrawerProps> = ({
   onCloneBaseRepo,
   onCleanupWorkspace,
   isAgentConnected,
+  adminToken,
 }) => {
   const [activeTab, setActiveTab] = useState<'repos' | 'workspaces'>('repos');
 
@@ -69,10 +71,10 @@ export const AdminDrawer: React.FC<AdminDrawerProps> = ({
   // ドロワーを開いた時に最新情報を自動ロード
   useEffect(() => {
     if (isOpen && isAgentConnected) {
-      onRequestBaseRepos();
-      onRequestWorkspaces();
+      onRequestBaseRepos(adminToken);
+      onRequestWorkspaces(adminToken);
     }
-  }, [isOpen, isAgentConnected, onRequestBaseRepos, onRequestWorkspaces]);
+  }, [isOpen, isAgentConnected, onRequestBaseRepos, onRequestWorkspaces, adminToken]);
 
   if (!isOpen) return null;
 
@@ -84,7 +86,8 @@ export const AdminDrawer: React.FC<AdminDrawerProps> = ({
       cloneUrl.trim(),
       cloneDeployToken.trim() || undefined,
       cloneDeployUser.trim() || undefined,
-      cloneCustomName.trim() || undefined
+      cloneCustomName.trim() || undefined,
+      adminToken
     );
 
     // フォームを閉じてリセット
@@ -95,7 +98,7 @@ export const AdminDrawer: React.FC<AdminDrawerProps> = ({
   };
 
   const handleConfirmCleanup = (userName: string) => {
-    onCleanupWorkspace(userName);
+    onCleanupWorkspace(userName, adminToken);
     setConfirmDeleteUser(null);
   };
 
@@ -196,6 +199,14 @@ export const AdminDrawer: React.FC<AdminDrawerProps> = ({
           <div className="p-3 bg-amber-950/40 border-b border-amber-800/60 text-amber-300 text-xs flex items-center space-x-2 shrink-0">
             <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
             <span>EC2上の Agent がオフラインです。起動状態をご確認ください。</span>
+          </div>
+        )}
+
+        {/* 管理者トークン未設定警告 */}
+        {!adminToken && (
+          <div className="p-3 bg-rose-950/40 border-b border-rose-800/60 text-rose-300 text-xs flex items-center space-x-2 shrink-0">
+            <ShieldAlert className="w-4 h-4 text-rose-400 shrink-0" />
+            <span>管理者トークンが未設定です。設定画面（⚙️）の管理者設定で ADMIN_TOKEN を設定してください。</span>
           </div>
         )}
 

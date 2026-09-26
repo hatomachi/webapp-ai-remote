@@ -139,12 +139,12 @@ export class SandboxManager {
         }
       }
 
-      // 2. ユーザーを作成 (ホームディレクトリ作成 -m, bashシェル -s /bin/bash)
+      // 2. ユーザーを作成 (ホームディレクトリ作成 -m, ユーザー個別グループ -U, 共有グループ補助所属 -G, bashシェル -s /bin/bash)
       const isRoot = process.getuid && process.getuid() === 0;
       const sudoPrefix = isRoot ? '' : 'sudo ';
-      const groupArg = (this.sharedGroup && this.groupExists(this.sharedGroup)) ? `-g "${this.sharedGroup}"` : '';
+      const groupArg = (this.sharedGroup && this.groupExists(this.sharedGroup)) ? `-G "${this.sharedGroup}"` : '';
 
-      const createCmd = `${sudoPrefix}useradd -m -s /bin/bash ${groupArg} "${osUser}"`.replace(/\s+/g, ' ');
+      const createCmd = `${sudoPrefix}useradd -m -U -s /bin/bash ${groupArg} "${osUser}"`.replace(/\s+/g, ' ');
       execSync(createCmd, { stdio: 'pipe' });
       console.log(`[SandboxManager] ✅ Created OS sandbox user: ${osUser}`);
       return { success: true, created: true };
@@ -174,13 +174,13 @@ export class SandboxManager {
       const isRoot = process.getuid && process.getuid() === 0;
       const sudoPrefix = isRoot ? '' : 'sudo ';
 
-      // 1. ディレクトリ全体の所有者を osUser に変更
-      execSync(`${sudoPrefix}chown -R "${osUser}:${osUser}" "${userWorkspaceDir}"`, { stdio: 'pipe' });
+      // 1. ディレクトリ全体の所有者を osUser に変更（グループはプライマリグループに自動連動）
+      execSync(`${sudoPrefix}chown -R "${osUser}" "${userWorkspaceDir}"`, { stdio: 'pipe' });
 
       // 2. パーミッションを 0700（所有者のみ rwx、グループ・他者は一切アクセス不可）に設定
       execSync(`${sudoPrefix}chmod 700 "${userWorkspaceDir}"`, { stdio: 'pipe' });
 
-      console.log(`[SandboxManager] 🔒 Applied chmod 700 and chown ${osUser}:${osUser} to ${userWorkspaceDir}`);
+      console.log(`[SandboxManager] 🔒 Applied chmod 700 and chown ${osUser} to ${userWorkspaceDir}`);
       return { success: true };
     } catch (err: any) {
       console.warn(`[SandboxManager] ⚠️ Could not apply permissions to ${userWorkspaceDir}:`, err.message);

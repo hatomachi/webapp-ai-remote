@@ -32,6 +32,21 @@ if docker image inspect "$SIMULATOR_IMAGE" >/dev/null 2>&1 && [ "${REBUILD:-fals
     --name "$CONTAINER_NAME" \
     --add-host=host.docker.internal:host-gateway \
     "$SIMULATOR_IMAGE" sleep infinity
+
+  echo "🔄 最新ソースコードを仮想EC2コンテナへ同期中..."
+  TMP_TAR=$(mktemp)
+  COPYFILE_DISABLE=1 tar --no-xattrs -C "$REPO_ROOT" \
+    --exclude='.git' \
+    --exclude='node_modules' \
+    --exclude='packages/*/node_modules' \
+    -cf "$TMP_TAR" packages infra docs scratch package.json
+  docker cp "$TMP_TAR" "$CONTAINER_NAME":/tmp/src-update.tar
+  docker exec "$CONTAINER_NAME" tar -xf /tmp/src-update.tar -C /opt/webapp-ai-remote
+  docker exec "$CONTAINER_NAME" rm -f /tmp/src-update.tar
+  rm -f "$TMP_TAR"
+
+  # サンドボックス用グループとsudoersの存在を保証
+  docker exec "$CONTAINER_NAME" bash -c "groupadd -f ai-shared && mkdir -p /etc/sudoers.d && echo 'root ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/webapp-ai-remote && chmod 0440 /etc/sudoers.d/webapp-ai-remote"
 else
   echo "1️⃣ 仮想EC2コンテナを起動中 ($IMAGE)..."
   docker run -d \
@@ -83,5 +98,8 @@ echo ""
 docker exec -it \
   -e HUB_URL="ws://host.docker.internal:8090/ws/agent" \
   -e BASE_DATA_DIR="/data" \
+  -e ENABLE_USER_SANDBOX="true" \
+  -e SANDBOX_USER_PREFIX="ai-" \
+  -e SANDBOX_SHARED_GROUP="ai-shared" \
   -w /opt/webapp-ai-remote \
   "$CONTAINER_NAME" npm run agent

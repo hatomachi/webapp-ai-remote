@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkBreaks from 'remark-breaks';
-import { AlertTriangle, Clock, DollarSign, Zap, Copy, Check, FileText, FileCode, Paperclip, X } from 'lucide-react';
+import { AlertTriangle, Clock, DollarSign, Zap, Copy, Check, FileText, X } from 'lucide-react';
 import { ChatMessage as ChatMessageType, AttachmentItem } from '../types/protocol';
 import { ToolUseCard } from './ToolUseCard';
 

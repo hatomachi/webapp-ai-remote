@@ -5,6 +5,7 @@ import { spawn, ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { createInterface } from 'node:readline';
 import { ChatMessage, ToolUseItem, saveSessionHistory, getSessionMessages } from './sessionManager.js';
+import { UserCredentials } from './workspaceManager.js';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -102,6 +103,7 @@ export interface ExecuteCopilotParams {
   permissionMode?: string;
   model?: string;
   reasoningEffort?: string;
+  credentials?: UserCredentials;
   onSendToHub: (msg: any) => void;
   onTurnEnd: () => void;
 }
@@ -234,6 +236,24 @@ export class CopilotTurnRunner {
     };
     if (effectivePermissionMode === 'bypassPermissions') {
       childEnv.COPILOT_ALLOW_ALL = 'true';
+    }
+
+    if (params.credentials) {
+      if (params.credentials.userName && params.credentials.userName.trim()) {
+        childEnv.GIT_AUTHOR_NAME = params.credentials.userName.trim();
+        childEnv.GIT_COMMITTER_NAME = params.credentials.userName.trim();
+      }
+      if (params.credentials.userEmail && params.credentials.userEmail.trim()) {
+        childEnv.GIT_AUTHOR_EMAIL = params.credentials.userEmail.trim();
+        childEnv.GIT_COMMITTER_EMAIL = params.credentials.userEmail.trim();
+      }
+      if (params.credentials.copilotToken && params.credentials.copilotToken.trim()) {
+        childEnv.GH_TOKEN = params.credentials.copilotToken.trim();
+        childEnv.GITHUB_TOKEN = params.credentials.copilotToken.trim();
+      }
+      if (params.credentials.gitlabToken && params.credentials.gitlabToken.trim()) {
+        childEnv.GITLAB_TOKEN = params.credentials.gitlabToken.trim();
+      }
     }
 
     const child = spawn(this.copilotBin, args, {

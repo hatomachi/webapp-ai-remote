@@ -14,8 +14,10 @@ import {
   AttachmentItem,
 } from './sessionManager.js';
 import { CopilotTurnRunner } from './copilotRunner.js';
+import { WorkspaceManager, UserCredentials } from './workspaceManager.js';
 
 const copilotRunner = new CopilotTurnRunner();
+const workspaceManager = new WorkspaceManager();
 
 // .env ファイルの自動読み込み (Node 20+ 標準機能 or 簡易パーサー)
 function loadEnv() {
@@ -351,7 +353,12 @@ async function handleClientMessage(msg: any) {
       timestamp: new Date().toISOString()
     });
   } else if (msg.type === 'list_projects') {
-    const result = scanProjects(msg.rootPath);
+    let result;
+    if (workspaceManager.isMultiTenant) {
+      result = workspaceManager.scanUserProjects(msg.userName, DEFAULT_CWD);
+    } else {
+      result = scanProjects(msg.rootPath);
+    }
     sendToHub({
       type: 'projects_list',
       baseDir: result.baseDir,
@@ -384,6 +391,34 @@ async function handleClientMessage(msg: any) {
     });
   } else if (msg.type === 'tool_approval_response') {
     handleToolApprovalResponse(msg);
+  } else if (msg.type === 'admin:list_repos') {
+    const repos = workspaceManager.listBaseRepos();
+    sendToHub({
+      type: 'admin:repos_list',
+      repos,
+      timestamp: new Date().toISOString()
+    });
+  } else if (msg.type === 'admin:clone_repo') {
+    const result = workspaceManager.cloneRepo(msg.repoUrl, msg.deployToken, msg.deployUser, msg.name);
+    sendToHub({
+      type: 'admin:clone_repo_result',
+      ...result,
+      timestamp: new Date().toISOString()
+    });
+  } else if (msg.type === 'admin:list_workspaces') {
+    const result = workspaceManager.listWorkspaces();
+    sendToHub({
+      type: 'admin:workspaces_list',
+      ...result,
+      timestamp: new Date().toISOString()
+    });
+  } else if (msg.type === 'admin:cleanup_workspace') {
+    const result = workspaceManager.cleanupWorkspace(msg.userName);
+    sendToHub({
+      type: 'admin:cleanup_workspace_result',
+      ...result,
+      timestamp: new Date().toISOString()
+    });
   } else {
     console.log('[Agent] Unhandled message type:', msg.type);
   }
@@ -589,6 +624,7 @@ async function executeCopilotTurn(params: {
   model?: string;
   reasoningEffort?: string;
   attachments?: AttachmentItem[];
+  credentials?: UserCredentials;
 }) {
   if (currentChildProcess || copilotRunner.isRunning) {
     sendToHub({
@@ -603,7 +639,13 @@ async function executeCopilotTurn(params: {
   const initialResume = params.isResume !== undefined
     ? params.isResume
     : Boolean(params.sessionId && knownSessions.has(params.sessionId));
-  const workDir = validateWorkDir(params.cwd);
+
+  let targetCwd = params.cwd;
+  if (workspaceManager.isMultiTenant && (!targetCwd || targetCwd === DEFAULT_CWD)) {
+    const userWs = workspaceManager.ensureUserWorkspace(params.credentials?.userName);
+    targetCwd = userWs.userWorkspaceDir;
+  }
+  const workDir = validateWorkDir(targetCwd);
 
   knownSessions.add(activeSessionId);
 
@@ -638,6 +680,7 @@ async function executeCopilotTurn(params: {
     permissionMode: params.permissionMode,
     model: params.model,
     reasoningEffort: params.reasoningEffort,
+    credentials: params.credentials,
     onSendToHub: (msg) => {
       // turn_start メッセージに attachments を付与して Hub 経由で PWA へ通知
       if (msg.type === 'turn_start' && savedAttachments.length > 0) {
@@ -672,6 +715,7 @@ async function executeClaudeTurn(params: {
   permissionMode?: string;
   model?: string;
   attachments?: AttachmentItem[];
+  credentials?: UserCredentials;
 }) {
   if (currentChildProcess || copilotRunner.isRunning) {
     sendToHub({
@@ -688,8 +732,14 @@ async function executeClaudeTurn(params: {
   const initialResume = params.isResume !== undefined
     ? params.isResume
     : Boolean(params.sessionId && knownSessions.has(params.sessionId));
+
+  let targetCwd = params.cwd;
+  if (workspaceManager.isMultiTenant && (!targetCwd || targetCwd === DEFAULT_CWD)) {
+    const userWs = workspaceManager.ensureUserWorkspace(params.credentials?.userName);
+    targetCwd = userWs.userWorkspaceDir;
+  }
   // 作業ディレクトリの検証とOSパス不一致の自動フォールバック
-  const workDir = validateWorkDir(params.cwd);
+  const workDir = validateWorkDir(targetCwd);
 
   const permissionMode = params.permissionMode || 'acceptEdits';
 
@@ -767,10 +817,7 @@ async function executeClaudeTurn(params: {
 
     const child = spawn(CLAUDE_BIN, args, {
       cwd: workDir,
-      env: {
-        ...process.env,
-        FORCE_COLOR: '0'
-      },
+      env: workspaceManager.buildChildProcessEnv(params.credentials),
       stdio: ['pipe', 'pipe', 'pipe'],
       shell: isWindows
     });

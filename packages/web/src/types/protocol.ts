@@ -113,6 +113,70 @@ export interface ToolApprovalRequestMessage {
   timestamp: string;
 }
 
+export interface UserCredentials {
+  userName?: string;        // 例: "Taro Tanaka" (コミット名義・worktree名)
+  userEmail?: string;       // 例: "tanaka@company.co.jp"
+  copilotToken?: string;    // ghp_xxxx
+  claudeApiKey?: string;    // sk-ant-xxxx
+  gitlabToken?: string;     // glpat-xxxx
+}
+
+export interface AdminRepoItem {
+  name: string;
+  path: string;
+  branch: string;
+  lastCommit: string;
+  lastUpdated: string;
+  sizeBytes: number;
+}
+
+export interface AdminReposListMessage {
+  type: 'admin:repos_list';
+  repos: AdminRepoItem[];
+  timestamp: string;
+}
+
+export interface AdminCloneRepoResultMessage {
+  type: 'admin:clone_repo_result';
+  success: boolean;
+  repoName?: string;
+  error?: string;
+  timestamp: string;
+}
+
+export interface WorkspaceRepoItem {
+  name: string;
+  branch: string;
+  path: string;
+}
+
+export interface WorkspaceItem {
+  userName: string;
+  path: string;
+  sizeBytes: number;
+  lastActive: string;
+  repos: WorkspaceRepoItem[];
+}
+
+export interface AdminWorkspacesListMessage {
+  type: 'admin:workspaces_list';
+  workspaces: WorkspaceItem[];
+  diskStats: {
+    totalBytes: number;
+    usedBytes: number;
+    freeBytes: number;
+  };
+  timestamp: string;
+}
+
+export interface AdminCleanupWorkspaceResultMessage {
+  type: 'admin:cleanup_workspace_result';
+  success: boolean;
+  userName: string;
+  error?: string;
+  timestamp: string;
+}
+
 export type InboundMessage =
   | HubStatusMessage
   | HubErrorMessage
@@ -127,7 +191,11 @@ export type InboundMessage =
   | TurnEndMessage
   | TurnErrorMessage
   | ExecutionAbortedMessage
-  | ToolApprovalRequestMessage;
+  | ToolApprovalRequestMessage
+  | AdminReposListMessage
+  | AdminCloneRepoResultMessage
+  | AdminWorkspacesListMessage
+  | AdminCleanupWorkspaceResultMessage;
 
 // --- Outbound Messages ---
 
@@ -142,6 +210,7 @@ export interface SendPromptMessage {
   engine?: AIEngine;
   reasoningEffort?: string;
   attachments?: AttachmentItem[];
+  credentials?: UserCredentials;
 }
 
 export interface AbortMessage {
@@ -155,6 +224,7 @@ export interface GetStatusMessage {
 export interface ListProjectsMessage {
   type: 'list_projects';
   rootPath?: string;
+  userName?: string;
 }
 
 export interface ListSessionsMessage {
@@ -181,6 +251,27 @@ export interface ToolApprovalResponseMessage {
   message?: string;
 }
 
+export interface AdminListReposMessage {
+  type: 'admin:list_repos';
+}
+
+export interface AdminCloneRepoMessage {
+  type: 'admin:clone_repo';
+  repoUrl: string;
+  deployToken?: string;
+  deployUser?: string;
+  name?: string;
+}
+
+export interface AdminListWorkspacesMessage {
+  type: 'admin:list_workspaces';
+}
+
+export interface AdminCleanupWorkspaceMessage {
+  type: 'admin:cleanup_workspace';
+  userName: string;
+}
+
 export type OutboundMessage =
   | SendPromptMessage
   | AbortMessage
@@ -189,7 +280,11 @@ export type OutboundMessage =
   | ListSessionsMessage
   | GetSessionMessagesMessage
   | DeleteSessionMessage
-  | ToolApprovalResponseMessage;
+  | ToolApprovalResponseMessage
+  | AdminListReposMessage
+  | AdminCloneRepoMessage
+  | AdminListWorkspacesMessage
+  | AdminCleanupWorkspaceMessage;
 
 // --- App State Types ---
 

@@ -185,7 +185,21 @@ const HOSTNAME = process.env.HOSTNAME || process.env.COMPUTERNAME || os.hostname
 let ws: WebSocket | null = null;
 let reconnectTimer: NodeJS.Timeout | null = null;
 let currentChildProcess: ChildProcess | null = null;
-const pendingApprovals = new Map<string, { child: ChildProcess; toolUseId?: string }>();
+
+interface ExecutionContext {
+  clientId?: string;
+  userName?: string;
+  sessionId?: string;
+}
+
+let currentExecution: ExecutionContext | null = null;
+
+const pendingApprovals = new Map<string, {
+  child: ChildProcess;
+  toolUseId?: string;
+  ownerClientId?: string;
+  ownerUserName?: string;
+}>();
 const knownSessions = new Set<string>();
 
 /**
@@ -343,13 +357,14 @@ async function handleClientMessage(msg: any) {
       executeClaudeTurn(msg);
     }
   } else if (msg.type === 'abort') {
-    abortCurrentTurn();
+    abortCurrentTurn(msg.clientId, msg.userName || msg.credentials?.userName);
   } else if (msg.type === 'get_status') {
     sendToHub({
       type: 'agent_status',
       hostname: HOSTNAME,
       cwd: DEFAULT_CWD,
       isBusy: currentChildProcess !== null || copilotRunner.isRunning,
+      targetClientId: msg.clientId,
       timestamp: new Date().toISOString()
     });
   } else if (msg.type === 'list_projects') {
@@ -363,6 +378,7 @@ async function handleClientMessage(msg: any) {
       type: 'projects_list',
       baseDir: result.baseDir,
       projects: result.projects,
+      targetClientId: msg.clientId,
       timestamp: new Date().toISOString()
     });
   } else if (msg.type === 'list_sessions') {
@@ -371,6 +387,7 @@ async function handleClientMessage(msg: any) {
       type: 'sessions_list',
       sessions,
       projectId: msg.projectId,
+      targetClientId: msg.clientId,
       timestamp: new Date().toISOString()
     });
   } else if (msg.type === 'get_session_messages') {
@@ -379,6 +396,7 @@ async function handleClientMessage(msg: any) {
       type: 'session_messages',
       sessionId: msg.sessionId,
       messages,
+      targetClientId: msg.clientId,
       timestamp: new Date().toISOString()
     });
   } else if (msg.type === 'delete_session') {
@@ -387,15 +405,21 @@ async function handleClientMessage(msg: any) {
     sendToHub({
       type: 'sessions_list',
       sessions,
+      targetClientId: msg.clientId,
       timestamp: new Date().toISOString()
     });
   } else if (msg.type === 'tool_approval_response') {
-    handleToolApprovalResponse(msg);
+    handleToolApprovalResponse({
+      ...msg,
+      clientId: msg.clientId,
+      userName: msg.userName || msg.credentials?.userName
+    });
   } else if (msg.type === 'admin:list_repos') {
     const repos = workspaceManager.listBaseRepos();
     sendToHub({
       type: 'admin:repos_list',
       repos,
+      targetClientId: msg.clientId,
       timestamp: new Date().toISOString()
     });
   } else if (msg.type === 'admin:clone_repo') {
@@ -403,6 +427,7 @@ async function handleClientMessage(msg: any) {
     sendToHub({
       type: 'admin:clone_repo_result',
       ...result,
+      targetClientId: msg.clientId,
       timestamp: new Date().toISOString()
     });
   } else if (msg.type === 'admin:list_workspaces') {
@@ -410,6 +435,7 @@ async function handleClientMessage(msg: any) {
     sendToHub({
       type: 'admin:workspaces_list',
       ...result,
+      targetClientId: msg.clientId,
       timestamp: new Date().toISOString()
     });
   } else if (msg.type === 'admin:cleanup_workspace') {
@@ -417,6 +443,7 @@ async function handleClientMessage(msg: any) {
     sendToHub({
       type: 'admin:cleanup_workspace_result',
       ...result,
+      targetClientId: msg.clientId,
       timestamp: new Date().toISOString()
     });
   } else {
@@ -431,9 +458,32 @@ function handleToolApprovalResponse(msg: {
   requestId: string;
   behavior: 'allow' | 'deny';
   message?: string;
+  clientId?: string;
+  userName?: string;
 }) {
   const pending = pendingApprovals.get(msg.requestId);
-  if (pending && pending.child && !pending.child.killed) {
+  if (!pending) {
+    console.warn(`[Agent] No pending approval found for requestId: ${msg.requestId}`);
+    return;
+  }
+
+  // 権限チェック: リクエスト発行者 (ownerClientId または ownerUserName) と一致しているか検証
+  const isMatchClient = pending.ownerClientId && msg.clientId && pending.ownerClientId === msg.clientId;
+  const isMatchUser = pending.ownerUserName && msg.userName && pending.ownerUserName === msg.userName;
+  const isUnrestricted = !pending.ownerClientId && !pending.ownerUserName;
+
+  if (!isMatchClient && !isMatchUser && !isUnrestricted) {
+    console.warn(`[Agent] ⚠️ Unauthorized tool approval attempt: owner=[${pending.ownerClientId}/${pending.ownerUserName}], caller=[${msg.clientId}/${msg.userName}]`);
+    sendToHub({
+      type: 'turn_error',
+      error: 'ツール承認の操作権限がありません（リクエスト発行者または同一ユーザーのみ操作可能です）',
+      targetClientId: msg.clientId,
+      timestamp: new Date().toISOString()
+    });
+    return;
+  }
+
+  if (pending.child && !pending.child.killed) {
     console.log(`[Agent] ➡️ Forwarding tool approval to Claude: ${msg.requestId} -> ${msg.behavior}`);
     const responsePayload = {
       type: 'control_response',
@@ -454,8 +504,6 @@ function handleToolApprovalResponse(msg: {
       console.error('[Agent] Failed to write control response to child stdin:', err.message);
     }
     pendingApprovals.delete(msg.requestId);
-  } else {
-    console.warn(`[Agent] No pending approval found for requestId: ${msg.requestId}`);
   }
 }
 
@@ -487,13 +535,38 @@ function validateWorkDir(rawCwd?: string): string {
 /**
  * 現在実行中の AI プロセス (Claude / Copilot) を中断
  */
-function abortCurrentTurn() {
+function abortCurrentTurn(callerClientId?: string, callerUserName?: string) {
+  if (!currentChildProcess && !copilotRunner.isRunning) {
+    return;
+  }
+
+  // 権限チェック: 実行中タスクの所有者 (ownerClientId または ownerUserName) と一致しているか検証
+  if (currentExecution) {
+    const isMatchClient = currentExecution.clientId && callerClientId && currentExecution.clientId === callerClientId;
+    const isMatchUser = currentExecution.userName && callerUserName && currentExecution.userName === callerUserName;
+    const isUnrestricted = !currentExecution.clientId && !currentExecution.userName;
+
+    if (!isMatchClient && !isMatchUser && !isUnrestricted) {
+      console.warn(`[Agent] ⚠️ Unauthorized abort attempt: owner=[${currentExecution.clientId}/${currentExecution.userName}], caller=[${callerClientId}/${callerUserName}]`);
+      sendToHub({
+        type: 'turn_error',
+        error: '実行中タスクの中断権限がありません（タスク実行者または同一ユーザーのみ操作可能です）',
+        targetClientId: callerClientId,
+        timestamp: new Date().toISOString()
+      });
+      return;
+    }
+  }
+
+  const targetClientId = currentExecution?.clientId || callerClientId;
+
   if (currentChildProcess) {
     console.log('[Agent] Aborting current Claude process...');
     currentChildProcess.kill('SIGINT');
     pendingApprovals.clear();
     sendToHub({
       type: 'execution_aborted',
+      targetClientId,
       timestamp: new Date().toISOString()
     });
   } else if (copilotRunner.isRunning) {
@@ -501,9 +574,11 @@ function abortCurrentTurn() {
     copilotRunner.abort();
     sendToHub({
       type: 'execution_aborted',
+      targetClientId,
       timestamp: new Date().toISOString()
     });
   }
+  currentExecution = null;
 }
 
 /**
@@ -625,12 +700,14 @@ async function executeCopilotTurn(params: {
   reasoningEffort?: string;
   attachments?: AttachmentItem[];
   credentials?: UserCredentials;
+  clientId?: string;
 }) {
   if (currentChildProcess || copilotRunner.isRunning) {
     sendToHub({
       type: 'error',
       message: 'AI agent is already running a task. Please wait or abort.',
-      code: 'BUSY'
+      code: 'BUSY',
+      targetClientId: params.clientId
     });
     return;
   }
@@ -648,6 +725,11 @@ async function executeCopilotTurn(params: {
   const workDir = validateWorkDir(targetCwd);
 
   knownSessions.add(activeSessionId);
+  currentExecution = {
+    clientId: params.clientId,
+    userName: params.credentials?.userName,
+    sessionId: activeSessionId
+  };
 
   // 添付ファイルを保存
   const savedAttachments = saveAttachments(params.attachments, activeSessionId);
@@ -672,37 +754,44 @@ async function executeCopilotTurn(params: {
     attachments: savedAttachments.length > 0 ? savedAttachments : undefined,
   };
 
-  await copilotRunner.execute({
-    prompt: fullPrompt,
-    sessionId: activeSessionId,
-    isResume: initialResume,
-    workDir,
-    permissionMode: params.permissionMode,
-    model: params.model,
-    reasoningEffort: params.reasoningEffort,
-    credentials: params.credentials,
-    sandboxManager: workspaceManager.sandboxManager,
-    onSendToHub: (msg) => {
-      // turn_start メッセージに attachments を付与して Hub 経由で PWA へ通知
-      if (msg.type === 'turn_start' && savedAttachments.length > 0) {
-        msg.attachments = savedAttachments;
+  try {
+    await copilotRunner.execute({
+      prompt: fullPrompt,
+      sessionId: activeSessionId,
+      isResume: initialResume,
+      workDir,
+      permissionMode: params.permissionMode,
+      model: params.model,
+      reasoningEffort: params.reasoningEffort,
+      credentials: params.credentials,
+      sandboxManager: workspaceManager.sandboxManager,
+      onSendToHub: (msg) => {
+        // turn_start メッセージに attachments を付与して Hub 経由で PWA へ通知
+        if (msg.type === 'turn_start' && savedAttachments.length > 0) {
+          msg.attachments = savedAttachments;
+        }
+        if (params.clientId && !msg.targetClientId) {
+          msg.targetClientId = params.clientId;
+        }
+        sendToHub(msg);
+      },
+      onTurnEnd: () => {
+        // セッション履歴に保存
+        try {
+          const updatedHistory = [...existingMessages, turnUserMessage];
+          saveSessionHistory(activeSessionId, updatedHistory, {
+            cwd: workDir,
+            projectId: path.basename(workDir),
+            engine: 'copilot',
+          });
+        } catch (err: any) {
+          console.warn('[Agent] Failed to persist Copilot session messages:', err.message);
+        }
       }
-      sendToHub(msg);
-    },
-    onTurnEnd: () => {
-      // セッション履歴に保存
-      try {
-        const updatedHistory = [...existingMessages, turnUserMessage];
-        saveSessionHistory(activeSessionId, updatedHistory, {
-          cwd: workDir,
-          projectId: path.basename(workDir),
-          engine: 'copilot',
-        });
-      } catch (err: any) {
-        console.warn('[Agent] Failed to persist Copilot session messages:', err.message);
-      }
-    }
-  });
+    });
+  } finally {
+    currentExecution = null;
+  }
 }
 
 /**
@@ -717,18 +806,25 @@ async function executeClaudeTurn(params: {
   model?: string;
   attachments?: AttachmentItem[];
   credentials?: UserCredentials;
+  clientId?: string;
 }) {
   if (currentChildProcess || copilotRunner.isRunning) {
     sendToHub({
       type: 'error',
       message: 'AI agent is already running a task. Please wait or abort.',
-      code: 'BUSY'
+      code: 'BUSY',
+      targetClientId: params.clientId
     });
     return;
   }
 
   const prompt = params.text;
   const activeSessionId = params.sessionId || randomUUID();
+  currentExecution = {
+    clientId: params.clientId,
+    userName: params.credentials?.userName,
+    sessionId: activeSessionId
+  };
   // isResume が明示されていなければ knownSessions にあるか判定（未記録なら初回なので false）
   const initialResume = params.isResume !== undefined
     ? params.isResume
@@ -790,6 +886,7 @@ async function executeClaudeTurn(params: {
       sessionId: activeSessionId,
       cwd: workDir,
       attachments: savedAttachments.length > 0 ? savedAttachments : undefined,
+      targetClientId: params.clientId,
       timestamp: new Date().toISOString()
     });
 
@@ -958,7 +1055,12 @@ async function executeClaudeTurn(params: {
         if (event.type === 'control_request' && event.request?.subtype === 'can_use_tool') {
           const req = event.request;
           const reqId = event.request_id;
-          pendingApprovals.set(reqId, { child, toolUseId: req.tool_use_id });
+          pendingApprovals.set(reqId, {
+            child,
+            toolUseId: req.tool_use_id,
+            ownerClientId: params.clientId,
+            ownerUserName: params.credentials?.userName
+          });
           console.log(`[Agent] ⚠️ Tool approval requested: ${req.tool_name} (request_id: ${reqId})`);
 
           // 蓄積メッセージの該当ツールを pending に更新
@@ -979,6 +1081,7 @@ async function executeClaudeTurn(params: {
             input: req.input,
             description: req.description,
             decisionReason: req.decision_reason,
+            targetClientId: params.clientId,
             timestamp: new Date().toISOString()
           });
         }
@@ -1004,14 +1107,16 @@ async function executeClaudeTurn(params: {
         sendToHub({
           type: 'claude_event',
           sessionId: capturedSessionId,
-          event
+          event,
+          targetClientId: params.clientId
         });
       } catch (err) {
         console.warn('[Agent] Non-JSON stdout line:', trimmed);
         sendToHub({
           type: 'claude_raw_log',
           stream: 'stdout',
-          text: trimmed
+          text: trimmed,
+          targetClientId: params.clientId
         });
       }
     });
@@ -1029,13 +1134,15 @@ async function executeClaudeTurn(params: {
       sendToHub({
         type: 'claude_raw_log',
         stream: 'stderr',
-        text: line
+        text: line,
+        targetClientId: params.clientId
       });
     });
 
     child.on('close', (code, signal) => {
       console.log(`[Agent] Claude process exited with code ${code}, signal ${signal}`);
       currentChildProcess = null;
+      currentExecution = null;
       pendingApprovals.clear();
 
       // 1. もし --session-id で「すでに存在する」と言われた場合、--resume で自動再試行！
@@ -1077,6 +1184,7 @@ async function executeClaudeTurn(params: {
         sessionId: capturedSessionId,
         exitCode: code,
         signal,
+        targetClientId: params.clientId,
         timestamp: new Date().toISOString()
       });
 
@@ -1095,6 +1203,7 @@ async function executeClaudeTurn(params: {
     child.on('error', (err: any) => {
       console.error('[Agent] Failed to spawn Claude process:', err);
       currentChildProcess = null;
+      currentExecution = null;
       pendingApprovals.clear();
 
       let errorDetail = err.message;
@@ -1110,6 +1219,7 @@ async function executeClaudeTurn(params: {
       sendToHub({
         type: 'turn_error',
         error: errorDetail,
+        targetClientId: params.clientId,
         timestamp: new Date().toISOString()
       });
     });
@@ -1120,9 +1230,11 @@ async function executeClaudeTurn(params: {
   } catch (err: any) {
     console.error('[Agent] Execution exception:', err);
     currentChildProcess = null;
+    currentExecution = null;
     sendToHub({
       type: 'turn_error',
       error: err.message,
+      targetClientId: params.clientId,
       timestamp: new Date().toISOString()
     });
   }

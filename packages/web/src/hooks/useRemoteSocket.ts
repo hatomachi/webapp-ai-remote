@@ -66,10 +66,28 @@ export function getDefaultSettings(): SocketSettings {
   };
 }
 
+export const CLIENT_ID_KEY = 'ai_remote_client_id_v1';
+
+export function getOrCreateClientId(): string {
+  if (typeof window === 'undefined') return 'server';
+  try {
+    let id = localStorage.getItem(CLIENT_ID_KEY);
+    if (!id) {
+      id = typeof crypto !== 'undefined' && crypto.randomUUID
+        ? crypto.randomUUID()
+        : `client-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+      localStorage.setItem(CLIENT_ID_KEY, id);
+    }
+    return id;
+  } catch {
+    return `client-${Date.now()}`;
+  }
+}
+
 /**
  * Hub の WebSocket URL から HTTP (SSE / API) URL を自動算出
  */
-export function deriveHttpUrls(hubWsUrl: string, authToken: string) {
+export function deriveHttpUrls(hubWsUrl: string, authToken: string, clientId?: string) {
   try {
     const parsed = new URL(hubWsUrl);
     parsed.protocol = parsed.protocol === 'wss:' ? 'https:' : 'http:';
@@ -85,10 +103,12 @@ export function deriveHttpUrls(hubWsUrl: string, authToken: string) {
     const eventsUrl = new URL(parsed.toString());
     eventsUrl.pathname = `${basePath}/events`;
     if (authToken) eventsUrl.searchParams.set('token', authToken);
+    if (clientId) eventsUrl.searchParams.set('clientId', clientId);
 
     const messageUrl = new URL(parsed.toString());
     messageUrl.pathname = `${basePath}/message`;
     if (authToken) messageUrl.searchParams.set('token', authToken);
+    if (clientId) messageUrl.searchParams.set('clientId', clientId);
 
     return {
       eventsUrl: eventsUrl.toString(),
@@ -97,10 +117,13 @@ export function deriveHttpUrls(hubWsUrl: string, authToken: string) {
   } catch {
     const isHttps = typeof window !== 'undefined' && window.location.protocol === 'https:';
     const base = `${isHttps ? 'https:' : 'http:'}//${typeof window !== 'undefined' ? window.location.host : 'localhost:8090'}`;
-    const tokenQuery = authToken ? `?token=${encodeURIComponent(authToken)}` : '';
+    const params = new URLSearchParams();
+    if (authToken) params.set('token', authToken);
+    if (clientId) params.set('clientId', clientId);
+    const queryString = params.toString() ? `?${params.toString()}` : '';
     return {
-      eventsUrl: `${base}/events${tokenQuery}`,
-      messageUrl: `${base}/message${tokenQuery}`,
+      eventsUrl: `${base}/events${queryString}`,
+      messageUrl: `${base}/message${queryString}`,
     };
   }
 }
@@ -186,6 +209,7 @@ export function useRemoteSocket(onMessage: (msg: InboundMessage) => void) {
   const resetRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const retryCountRef = useRef(0);
   const lastStatusSentTimeRef = useRef(0);
+  const clientIdRef = useRef(getOrCreateClientId());
 
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
@@ -195,6 +219,11 @@ export function useRemoteSocket(onMessage: (msg: InboundMessage) => void) {
 
   // メッセージ解析と共通ステート更新
   const handleInbound = useCallback((msg: InboundMessage, sendFn: (out: OutboundMessage) => void) => {
+    // targetClientId が指定されており、自分宛でない場合はドロップ（二重防壁）
+    if (msg.targetClientId && msg.targetClientId !== clientIdRef.current) {
+      return;
+    }
+
     if (msg.type === 'status') {
       setIsAgentConnected(msg.agentConnected);
       if (!msg.agentConnected) {
@@ -265,12 +294,17 @@ export function useRemoteSocket(onMessage: (msg: InboundMessage) => void) {
   // HTTP POST でメッセージ送信
   const postHttpMessage = useCallback(async (msg: OutboundMessage, messageUrl: string) => {
     try {
+      const payload: OutboundMessage = {
+        ...msg,
+        clientId: clientIdRef.current,
+      };
       const res = await fetch(messageUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'X-Client-Id': clientIdRef.current,
         },
-        body: JSON.stringify(msg),
+        body: JSON.stringify(payload),
       });
       if (!res.ok) {
         console.error('[RemoteSocket] POST message failed with status:', res.status);
@@ -378,7 +412,7 @@ export function useRemoteSocket(onMessage: (msg: InboundMessage) => void) {
     const { hubUrl, authToken } = settingsRef.current;
     if (!hubUrl) return;
 
-    const { eventsUrl, messageUrl } = deriveHttpUrls(hubUrl, authToken);
+    const { eventsUrl, messageUrl } = deriveHttpUrls(hubUrl, authToken, clientIdRef.current);
     console.log('[RemoteSocket] Connecting via HTTP (SSE):', eventsUrl);
 
     try {
@@ -447,6 +481,7 @@ export function useRemoteSocket(onMessage: (msg: InboundMessage) => void) {
       if (authToken) {
         urlObj.searchParams.set('token', authToken);
       }
+      urlObj.searchParams.set('clientId', clientIdRef.current);
 
       console.log('[RemoteSocket] Connecting via WebSocket:', urlObj.toString());
       const ws = new WebSocket(urlObj.toString());
@@ -608,13 +643,17 @@ export function useRemoteSocket(onMessage: (msg: InboundMessage) => void) {
 
   // 汎用メッセージ送信関数
   const send = useCallback((msg: OutboundMessage) => {
+    const payload: OutboundMessage = {
+      ...msg,
+      clientId: clientIdRef.current,
+    };
     if (activeTransport === 'ws' && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify(msg));
+      wsRef.current.send(JSON.stringify(payload));
       return true;
     } else if (activeTransport === 'http') {
       const { hubUrl, authToken } = settings;
-      const { messageUrl } = deriveHttpUrls(hubUrl, authToken);
-      postHttpMessage(msg, messageUrl);
+      const { messageUrl } = deriveHttpUrls(hubUrl, authToken, clientIdRef.current);
+      postHttpMessage(payload, messageUrl);
       return true;
     }
     return false;
@@ -731,6 +770,7 @@ export function useRemoteSocket(onMessage: (msg: InboundMessage) => void) {
   }, [send]);
 
   return {
+    clientId: clientIdRef.current,
     settings,
     updateSettings,
     isHubConnected,

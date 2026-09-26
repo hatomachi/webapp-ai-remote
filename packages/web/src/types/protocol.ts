@@ -179,7 +179,12 @@ export interface AdminCleanupWorkspaceResultMessage {
   timestamp: string;
 }
 
-export type InboundMessage =
+export interface BaseMessage {
+  clientId?: string;
+  targetClientId?: string;
+}
+
+export type InboundMessage = (
   | HubStatusMessage
   | HubErrorMessage
   | AgentHelloMessage
@@ -197,7 +202,8 @@ export type InboundMessage =
   | AdminReposListMessage
   | AdminCloneRepoResultMessage
   | AdminWorkspacesListMessage
-  | AdminCleanupWorkspaceResultMessage;
+  | AdminCleanupWorkspaceResultMessage
+) & BaseMessage;
 
 // --- Outbound Messages ---
 
@@ -274,7 +280,7 @@ export interface AdminCleanupWorkspaceMessage {
   userName: string;
 }
 
-export type OutboundMessage =
+export type OutboundMessage = (
   | SendPromptMessage
   | AbortMessage
   | GetStatusMessage
@@ -286,7 +292,8 @@ export type OutboundMessage =
   | AdminListReposMessage
   | AdminCloneRepoMessage
   | AdminListWorkspacesMessage
-  | AdminCleanupWorkspaceMessage;
+  | AdminCleanupWorkspaceMessage
+) & BaseMessage;
 
 // --- App State Types ---
 

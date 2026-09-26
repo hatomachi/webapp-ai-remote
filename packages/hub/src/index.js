@@ -5,7 +5,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 const PORT = parseInt(process.env.PORT || '3001', 10);
 const PING_INTERVAL_MS = 30000;
 
-// 動的ルーム管理 (Map<token, { agentWs: WebSocket | null, clients: Set<WebSocket>, sseClients: Set<http.ServerResponse> }>)
+// 動的ルーム管理 (Map<token, { agentWs: WebSocket | null, clients: Set<WebSocket>, clientsById: Map<string, WebSocket>, sseClients: Set<http.ServerResponse>, sseClientsById: Map<string, http.ServerResponse> }>)
 const rooms = new Map();
 
 /**
@@ -17,7 +17,9 @@ function getOrCreateRoom(token) {
     room = {
       agentWs: null,
       clients: new Set(),
-      sseClients: new Set()
+      clientsById: new Map(),
+      sseClients: new Set(),
+      sseClientsById: new Map()
     };
     rooms.set(token, room);
   }
@@ -86,6 +88,16 @@ function extractToken(req) {
   return token || null;
 }
 
+/**
+ * リクエストからクライアントIDを抽出（クエリパラメータまたは x-client-id ヘッダー）
+ */
+function extractClientId(req) {
+  const reqUrl = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
+  const queryClientId = reqUrl.searchParams.get('clientId');
+  const headerClientId = req.headers['x-client-id'];
+  return (queryClientId || headerClientId || '').trim() || null;
+}
+
 // HTTP サーバーの作成（/health, /api/events, /api/message および WebSocket upgrade の受付）
 const server = http.createServer((req, res) => {
   const reqUrl = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
@@ -137,7 +149,8 @@ const server = http.createServer((req, res) => {
 
     const room = getOrCreateRoom(token);
     const masked = maskToken(token);
-    console.log(`[Hub] SSE Client connected to room [${masked}]`);
+    const clientId = extractClientId(req);
+    console.log(`[Hub] SSE Client connected to room [${masked}]${clientId ? ` (clientId: ${clientId})` : ''}`);
 
     res.writeHead(200, {
       'Content-Type': 'text/event-stream; charset=utf-8',
@@ -150,6 +163,9 @@ const server = http.createServer((req, res) => {
     res.write(': ' + ' '.repeat(2048) + '\n\n');
 
     room.sseClients.add(res);
+    if (clientId) {
+      room.sseClientsById.set(clientId, res);
+    }
 
     // 接続直後に現在の Agent 接続状態を即座に送信
     const isConnected = room.agentWs !== null && room.agentWs.readyState === WebSocket.OPEN;
@@ -171,7 +187,10 @@ const server = http.createServer((req, res) => {
     req.on('close', () => {
       clearInterval(sseKeepAlive);
       room.sseClients.delete(res);
-      console.log(`[Hub] SSE Client disconnected from room [${masked}]`);
+      if (clientId && room.sseClientsById.get(clientId) === res) {
+        room.sseClientsById.delete(clientId);
+      }
+      console.log(`[Hub] SSE Client disconnected from room [${masked}]${clientId ? ` (clientId: ${clientId})` : ''}`);
       cleanupRoomIfEmpty(token);
     });
 
@@ -288,7 +307,38 @@ wssAgent.on('connection', (ws, req) => {
   broadcastAgentStatus(room);
 
   ws.on('message', (data, isBinary) => {
-    // 当該ルームの WebSocket Client 全員にメッセージを転送
+    let targetClientId = null;
+    let text = null;
+    try {
+      text = typeof data === 'string' ? data : data.toString('utf-8');
+      const parsed = JSON.parse(text);
+      if (parsed && typeof parsed === 'object' && parsed.targetClientId) {
+        targetClientId = parsed.targetClientId;
+      }
+    } catch {
+      // not JSON or parse error, fallback to broadcast
+    }
+
+    if (targetClientId) {
+      // 個別宛先 (targetClientId) が指定されている場合: 該当クライアントにのみ配信
+      const targetWs = room.clientsById.get(targetClientId);
+      if (targetWs && targetWs.readyState === WebSocket.OPEN) {
+        targetWs.send(data, { binary: isBinary });
+      }
+
+      const targetSse = room.sseClientsById.get(targetClientId);
+      if (targetSse) {
+        const ssePayload = `data: ${text}\n\n`;
+        try {
+          targetSse.write(ssePayload);
+        } catch {
+          // ignore
+        }
+      }
+      return;
+    }
+
+    // 個別宛先が未指定の場合: ルーム内全員にブロードキャスト（ステータス通知・全体アナウンス等）
     for (const client of room.clients) {
       if (client.readyState === WebSocket.OPEN) {
         client.send(data, { binary: isBinary });
@@ -297,7 +347,9 @@ wssAgent.on('connection', (ws, req) => {
 
     // 当該ルームの SSE Client 全員にストリーミング転送
     if (room.sseClients && room.sseClients.size > 0) {
-      const text = typeof data === 'string' ? data : data.toString('utf-8');
+      if (text === null) {
+        text = typeof data === 'string' ? data : data.toString('utf-8');
+      }
       const ssePayload = `data: ${text}\n\n`;
       for (const res of room.sseClients) {
         try {
@@ -328,8 +380,14 @@ wssClient.on('connection', (ws, req) => {
   const token = req.token;
   const room = getOrCreateRoom(token);
   const masked = maskToken(token);
+  const initialClientId = extractClientId(req);
 
-  console.log(`[Hub] Client connected to room [${masked}]`);
+  if (initialClientId) {
+    ws.clientId = initialClientId;
+    room.clientsById.set(initialClientId, ws);
+  }
+
+  console.log(`[Hub] Client connected to room [${masked}]${initialClientId ? ` (clientId: ${initialClientId})` : ''}`);
   room.clients.add(ws);
   ws.isAlive = true;
 
@@ -346,6 +404,23 @@ wssClient.on('connection', (ws, req) => {
   }));
 
   ws.on('message', (data, isBinary) => {
+    // クライアントからのメッセージに clientId が含まれていればマッピングを更新
+    try {
+      const text = typeof data === 'string' ? data : data.toString('utf-8');
+      const parsed = JSON.parse(text);
+      if (parsed && typeof parsed === 'object' && parsed.clientId) {
+        if (ws.clientId && ws.clientId !== parsed.clientId) {
+          if (room.clientsById.get(ws.clientId) === ws) {
+            room.clientsById.delete(ws.clientId);
+          }
+        }
+        ws.clientId = parsed.clientId;
+        room.clientsById.set(parsed.clientId, ws);
+      }
+    } catch {
+      // ignore
+    }
+
     // 当該ルームの Agent にメッセージを転送
     if (room.agentWs && room.agentWs.readyState === WebSocket.OPEN) {
       room.agentWs.send(data, { binary: isBinary });
@@ -360,14 +435,20 @@ wssClient.on('connection', (ws, req) => {
   });
 
   ws.on('close', () => {
-    console.log(`[Hub] Client disconnected from room [${masked}]`);
+    console.log(`[Hub] Client disconnected from room [${masked}]${ws.clientId ? ` (clientId: ${ws.clientId})` : ''}`);
     room.clients.delete(ws);
+    if (ws.clientId && room.clientsById.get(ws.clientId) === ws) {
+      room.clientsById.delete(ws.clientId);
+    }
     cleanupRoomIfEmpty(token);
   });
 
   ws.on('error', (err) => {
     console.error(`[Hub] Client socket error in room [${masked}]:`, err.message);
     room.clients.delete(ws);
+    if (ws.clientId && room.clientsById.get(ws.clientId) === ws) {
+      room.clientsById.delete(ws.clientId);
+    }
     cleanupRoomIfEmpty(token);
   });
 });
@@ -394,6 +475,9 @@ const interval = setInterval(() => {
         console.warn(`[Hub] Terminating inactive Client in room [${maskToken(token)}]`);
         client.terminate();
         room.clients.delete(client);
+        if (client.clientId && room.clientsById.get(client.clientId) === client) {
+          room.clientsById.delete(client.clientId);
+        }
       } else {
         client.isAlive = false;
         client.ping();

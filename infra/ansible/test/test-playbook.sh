@@ -66,6 +66,14 @@ if [ -z "$CLAUDE_PATH" ]; then
   exit 1
 fi
 
+echo "  - Checking GitHub Copilot CLI:"
+COPILOT_PATH=$(docker exec "$CONTAINER_NAME" bash -c "command -v copilot || which copilot || true")
+echo "    Copilot path: $COPILOT_PATH"
+if [ -z "$COPILOT_PATH" ]; then
+  echo "    ❌ ERROR: copilot binary not found in PATH!"
+  exit 1
+fi
+
 echo "  - Checking Directories:"
 for dir in /data /data/base-repos /data/workspaces /data/logs /opt/webapp-ai-remote; do
   docker exec "$CONTAINER_NAME" test -d "$dir"

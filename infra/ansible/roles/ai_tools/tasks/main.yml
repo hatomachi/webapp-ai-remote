@@ -40,41 +40,47 @@
   changed_when: false
 
 - name: Check Claude Code CLI
-  command: which claude
+  shell: command -v claude || true
   register: claude_check
-  failed_when: false
   changed_when: false
 
 - name: Install Claude Code CLI globally
   command: npm install -g @anthropic-ai/claude-code
-  when: claude_check.rc != 0
+  when: claude_check.stdout == ""
 
 - name: Check GitHub CLI (gh)
-  command: which gh
+  shell: command -v gh || true
   register: gh_check
-  failed_when: false
   changed_when: false
 
 - name: Install GitHub CLI (Debian/Ubuntu)
   apt:
     name: gh
     state: present
-  when: ansible_os_family == "Debian" and gh_check.rc != 0
+  when: ansible_os_family == "Debian" and gh_check.stdout == ""
   failed_when: false
 
 - name: Install GitHub CLI (RedHat/Amazon Linux)
   dnf:
     name: gh
     state: present
-  when: ansible_os_family == "RedHat" and gh_check.rc != 0
+  when: ansible_os_family == "RedHat" and gh_check.stdout == ""
   failed_when: false
 
 - name: Check GitHub Copilot CLI
-  command: which copilot
+  shell: command -v copilot || true
   register: copilot_check
-  failed_when: false
+  changed_when: false
+
+- name: Install GitHub Copilot CLI globally
+  command: npm install -g @github/copilot
+  when: copilot_check.stdout == ""
+
+- name: Verify GitHub Copilot CLI is installed
+  shell: command -v copilot
+  register: copilot_verify
   changed_when: false
 
 - name: Notice for GitHub Copilot CLI
   debug:
-    msg: "GitHub Copilot CLI status: {{ 'Installed at ' + copilot_check.stdout if copilot_check.rc == 0 else 'Copilot binary not found in PATH. Please place your organization copilot binary in /usr/local/bin/copilot' }}"
+    msg: "GitHub Copilot CLI installed at: {{ copilot_verify.stdout }}"

@@ -41,7 +41,7 @@ sudo ansible-playbook -i localhost, -c local playbook.yml
 ### ④ 構築完了後の確認
 Playbookの実行が完了すると、以下が自動的に構成・稼働します：
 - **Docker & Docker Compose**: Nginx (ポート8090) と WebSocket Relay Hub (ポート3001) がコンテナ起動
-- **Node.js 20 LTS & Claude Code CLI**: ホストOS上で稼働
+- **Node.js 20 LTS & Claude Code CLI / GitHub Copilot CLI**: ホストOS上で稼働
 - **データ領域**: `/data/base-repos`, `/data/workspaces`, `/data/logs` が生成
 - **cron 同期**: 5分ごとに全ベースリポジトリが自動 `git fetch`
 - **Bridge Agent サービス**: systemd ユニット `webapp-ai-remote-agent` が自動起動し、同機Hubへ接続

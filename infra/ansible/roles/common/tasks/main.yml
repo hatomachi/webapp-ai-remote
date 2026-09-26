@@ -20,6 +20,7 @@
       - cron
       - build-essential
       - sudo
+      - which
     state: present
   when: ansible_os_family == "Debian"
 
@@ -35,6 +36,7 @@
       - ca-certificates
       - cronie
       - sudo
+      - which
     state: present
   when: ansible_os_family == "RedHat"
 

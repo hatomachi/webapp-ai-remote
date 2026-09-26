@@ -86,6 +86,12 @@
     group: "{{ resolved_group }}"
     mode: '0644'
 
+- name: Ensure /etc/systemd/system directory exists
+  file:
+    path: /etc/systemd/system
+    state: directory
+    mode: '0755'
+
 - name: Deploy systemd service unit for Agent
   template:
     src: agent.service.j2

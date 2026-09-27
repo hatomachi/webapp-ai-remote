@@ -21,6 +21,7 @@
       - build-essential
       - sudo
       - which
+      - iptables
     state: present
   when: ansible_os_family == "Debian"
 
@@ -37,6 +38,7 @@
       - cronie
       - sudo
       - which
+      - iptables
     state: present
   when: ansible_os_family == "RedHat"
 

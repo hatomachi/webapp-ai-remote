@@ -184,3 +184,36 @@ export interface AdminCleanupWorkspaceMessage {
    - `HOME=/home/<osUser>`, `USER=<osUser>` を設定し、AI CLI の設定・キャッシュ（`~/.claude/`, `~/.copilot/`）もメンバーごとに完全分離。
    - 非Linux環境（macOS/Windows）やサンドボックス無効時は、安全に通常実行へフォールバック（Graceful Fallback）。
 
+---
+
+## 7. 🛡️ 権限分離・ユーザー認証・インフラ保護（Phase 5）
+
+### ① Session 5-1: Hub 個別ルーティング ＆ ツール承認・Abort の所有者限定化
+- **Hub 個別配信**: `clientId` に基づくルーティングにより、ストリーミングやイベントの他クライアントへの誤送信・混線を完全防止。
+- **Agent 操作認可**: ツール承認（`tool_approval_response`）および中断（`abort`）を実行元クライアント／ユーザー名（`userName`）に紐付け、他者による操作横取りを防止（同一ユーザーの別端末引き継ぎは安全に許可）。
+
+### ② Session 5-2: Admin 機能のトークン保護 ＆ ワークスペース自己初期化認可
+- **Admin Token**: `ADMIN_TOKEN` 環境変数による管理者保護。大元 clone（`admin:clone_repo`）や全メンバー一覧（`admin:list_workspaces`）を管理者専用に制限（403 Forbidden）。
+- **ワークスペース削除の認可分離**: 一般メンバーは自己のワークスペース（`userName` 一致）の Worktree リセットのみ許可し、他人の領域削除をブロック。
+
+### ③ Session 5-3: メインGitLab PAT動的検証による個人認証 ＆ セッション履歴の本人限定化
+- **動的個人認証（GitLab API検証）**: `gitlabToken`（`/api/v4/user`）を API 検証し、公式の `username` を動的確定・身元バインド。自己申告のなりすましを排除（SHA-256 キャッシュにより 0ms 高速化）。
+- **セッション履歴の本人限定化**: セッションに `owner` を記録し、一覧・詳細取得・削除を本人のみに限定。
+
+### ④ Session 5-4: OS/AWS インフラ保護 ＆ リポジトリ Deploy Token 保護
+- **AWS メタデータ（IMDS）のカーネルレベル遮断**:
+  - 脅威: AI CLI（Claude Code / Copilot CLI）の Bash 実行により、EC2 メタデータエンドポイント（`http://169.254.169.254/latest/meta-data/`）から IAM ロール一時クレデンシャルが窃取されるリスク。
+  - 対策:
+    - サンドボックスユーザー作成時、プライマリグループを `ai-shared` に設定（ソケットの実効 GID を統一）。
+    - `iptables` により、`ai-shared` グループからの `169.254.169.254` への送信パケットを即座に `REJECT`（Connection Refused）。管理プロセス（root / app_user）の通信は阻害せず、AI 実行プロセスのみ確実に遮断。
+    - AWS IMDSv2（ホップリミット 1）を推奨設定とし多層防御。
+- **大元リポジトリ Deploy Token の平文露出防止 ＆ クレデンシャル分離**:
+  - 脅威: 大元リポジトリ（`/data/base-repos/*`）の `.git/config` に Deploy Token（`https://user:token@gitlab...`）が記録されると、Worktree 内で作業する非特権メンバー（`ai-*`）からトークンが閲覧・窃取されるリスク。
+  - 対策:
+    - `WorkspaceManager.cloneRepo`: クローン完了直後に `git remote set-url origin <cleanUrl>` を実行し、大元の `.git/config` からトークンを完全に除去（サニタイズ）。
+    - 認証情報は所有者のみアクセス可能なセキュアファイル（`/data/.git-credentials`、パーミッション `0600`）に隔離保存。
+    - 大元リポジトリに `credential.helper = "store --file=/data/.git-credentials"` を設定し、管理プロセスの定期 fetch cron は支障なく動作。
+    - 非特権ユーザー（`ai-*`）はクレデンシャルファイルへの読み取り権限を持たない（`Permission denied`）ためトークン漏洩を防止しつつ、Worktree でのローカル Git 操作（`git status`, `git commit` 等）は 100% 正常動作。
+    - `sanitizeBaseRepoConfigs()` により、既存の大元リポジトリ群も起動時に全自動でトークン除去・セキュア化。
+
+

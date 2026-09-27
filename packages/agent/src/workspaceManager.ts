@@ -56,6 +56,7 @@ export interface DiskStats {
 export interface WorkspaceManagerOptions {
   baseReposDir?: string;
   workspacesDir?: string;
+  credentialsFile?: string;
   sandboxManager?: SandboxManager;
   sandboxOptions?: SandboxManagerOptions;
 }
@@ -63,6 +64,7 @@ export interface WorkspaceManagerOptions {
 export class WorkspaceManager {
   public readonly baseReposDir: string;
   public readonly workspacesDir: string;
+  public readonly credentialsFile: string;
   public readonly isMultiTenant: boolean;
   public readonly sandboxManager: SandboxManager;
 
@@ -70,6 +72,7 @@ export class WorkspaceManager {
     const defaultDataDir = process.env.BASE_DATA_DIR || '/data';
     this.baseReposDir = options?.baseReposDir || process.env.BASE_REPOS_DIR || path.join(defaultDataDir, 'base-repos');
     this.workspacesDir = options?.workspacesDir || process.env.WORKSPACES_DIR || path.join(defaultDataDir, 'workspaces');
+    this.credentialsFile = options?.credentialsFile || process.env.GIT_CREDENTIALS_FILE || path.join(defaultDataDir, '.git-credentials');
     this.sandboxManager = options?.sandboxManager || new SandboxManager(options?.sandboxOptions);
 
     // マルチテナントモードの判定: baseReposDir が存在するか、明示的に MULTI_TENANT=true の場合
@@ -81,6 +84,10 @@ export class WorkspaceManager {
       console.log(`[WorkspaceManager] Multi-tenant mode ACTIVE.`);
       console.log(`[WorkspaceManager] Base repos dir: ${this.baseReposDir}`);
       console.log(`[WorkspaceManager] Workspaces dir: ${this.workspacesDir}`);
+      console.log(`[WorkspaceManager] Credentials file: ${this.credentialsFile}`);
+
+      // 既存の大元リポジトリの URL を検査し、トークンが平文保存されていれば自動サニタイズ
+      this.sanitizeBaseRepoConfigs();
     } else {
       console.log(`[WorkspaceManager] Single-tenant / Standalone mode active.`);
     }
@@ -391,6 +398,117 @@ ${repoList}
   }
 
   /**
+   * Deploy Token を安全な git-credentials ファイル（chmod 600）に保存
+   * 非特権ユーザーからの閲覧を遮断しつつ、管理プロセスの git fetch を可能にする
+   */
+  public saveDeployCredentials(repoUrl: string, deployToken: string, deployUser?: string): void {
+    try {
+      const parentDir = path.dirname(this.credentialsFile);
+      if (!fs.existsSync(parentDir)) {
+        fs.mkdirSync(parentDir, { recursive: true });
+      }
+
+      const user = deployUser || 'deploy-token';
+      // URLからプロトコルとホスト名を抽出
+      let host = '';
+      let protocol = 'https';
+      try {
+        const parsed = new URL(repoUrl);
+        host = parsed.host;
+        protocol = parsed.protocol.replace(':', '');
+      } catch {
+        const match = repoUrl.match(/^(?:https?:\/\/)?([^/:]+)/);
+        host = match ? match[1] : 'gitlab.internal';
+      }
+
+      // エントリ形式: https://user:token@host
+      const newEntry = `${protocol}://${encodeURIComponent(user)}:${encodeURIComponent(deployToken)}@${host}`;
+
+      let entries: string[] = [];
+      if (fs.existsSync(this.credentialsFile)) {
+        try {
+          const content = fs.readFileSync(this.credentialsFile, 'utf-8');
+          entries = content.split('\n').filter(line => line.trim().length > 0);
+        } catch {}
+      }
+
+      // 同一ホスト・同一ユーザーのエントリを更新、無ければ追加
+      const prefix = `${protocol}://${encodeURIComponent(user)}:`;
+      const hostSuffix = `@${host}`;
+      const existingIdx = entries.findIndex(e => e.startsWith(prefix) && e.includes(hostSuffix));
+
+      if (existingIdx >= 0) {
+        entries[existingIdx] = newEntry;
+      } else {
+        entries.push(newEntry);
+      }
+
+      fs.writeFileSync(this.credentialsFile, entries.join('\n') + '\n', { mode: 0o600 });
+      try {
+        fs.chmodSync(this.credentialsFile, 0o600);
+      } catch {}
+      console.log(`[WorkspaceManager] 🔑 Saved deploy credentials for ${host} to ${this.credentialsFile} (mode 0600)`);
+    } catch (err: any) {
+      console.warn(`[WorkspaceManager] Failed to save deploy credentials to ${this.credentialsFile}:`, err.message);
+    }
+  }
+
+  /**
+   * base-repos ディレクトリ内の全大元リポジトリをスキャンし、
+   * .git/config の remote.origin.url にトークンが含まれていれば自動除去して安全化
+   */
+  public sanitizeBaseRepoConfigs(): { sanitizedCount: number; sanitizedRepos: string[] } {
+    if (!fs.existsSync(this.baseReposDir)) {
+      return { sanitizedCount: 0, sanitizedRepos: [] };
+    }
+
+    const sanitizedRepos: string[] = [];
+    try {
+      const entries = fs.readdirSync(this.baseReposDir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        const repoPath = path.join(this.baseReposDir, entry.name);
+        const isGit = fs.existsSync(path.join(repoPath, '.git')) || fs.existsSync(path.join(repoPath, 'HEAD'));
+        if (!isGit) continue;
+
+        try {
+          const originUrl = execSync('git remote get-url origin', { cwd: repoPath, encoding: 'utf-8' }).trim();
+          // URL にユーザー名:トークンが含まれているかチェック (https://user:token@host/...)
+          const match = originUrl.match(/^(https?:\/\/)([^:]+):([^@]+)@([^/]+)(.*)$/);
+          if (match) {
+            const [, scheme, user, token, host, pathname] = match;
+            const cleanUrl = `${scheme}${host}${pathname}`;
+            const decodedUser = decodeURIComponent(user);
+            const decodedToken = decodeURIComponent(token);
+
+            // 1. クレデンシャルファイルに退避
+            this.saveDeployCredentials(cleanUrl, decodedToken, decodedUser);
+
+            // 2. remote URL をサニタイズ
+            execSync(`git remote set-url origin "${cleanUrl}"`, { cwd: repoPath, stdio: 'pipe' });
+
+            // 3. credential.helper を設定
+            execSync(`git config credential.helper "store --file=\\"${this.credentialsFile}\\""`, {
+              cwd: repoPath,
+              stdio: 'pipe'
+            });
+
+            sanitizedRepos.push(entry.name);
+            console.log(`[WorkspaceManager] 🛡️ Sanitized leaked token in existing base repo: ${entry.name}`);
+          }
+        } catch {}
+      }
+    } catch (err: any) {
+      console.warn(`[WorkspaceManager] Failed to sanitize base repo configs:`, err.message);
+    }
+
+    return {
+      sanitizedCount: sanitizedRepos.length,
+      sanitizedRepos
+    };
+  }
+
+  /**
    * 【Admin API】新規大元リポジトリを base-repos に安全に clone
    */
   public cloneRepo(repoUrl: string, deployToken?: string, deployUser?: string, customName?: string): { success: boolean; repoName?: string; error?: string } {
@@ -412,8 +530,10 @@ ${repoList}
 
     try {
       let finalUrl = repoUrl;
+      const isHttps = repoUrl.startsWith('https://');
+
       // Deploy Token を URL に挿入（HTTPSの場合）
-      if (deployToken && repoUrl.startsWith('https://')) {
+      if (deployToken && isHttps) {
         const user = deployUser || 'deploy-token';
         finalUrl = repoUrl.replace('https://', `https://${encodeURIComponent(user)}:${encodeURIComponent(deployToken)}@`);
       }
@@ -423,6 +543,28 @@ ${repoList}
         cwd: this.baseReposDir,
         stdio: 'pipe'
       });
+
+      // 【Session 5-4: Deploy Token 保護】
+      // クローン完了直後に、大元リポジトリの .git/config からトークンを完全に除去（サニタイズ）
+      if (deployToken && isHttps) {
+        try {
+          // 1. remote URL をトークンなしの素の repoUrl に置き換え
+          execSync(`git remote set-url origin "${repoUrl}"`, { cwd: targetPath, stdio: 'pipe' });
+
+          // 2. クレデンシャルを安全な credential-store ファイル（chmod 600）に保存
+          this.saveDeployCredentials(repoUrl, deployToken, deployUser);
+
+          // 3. 大元リポジトリに credential.helper を設定（管理者/cronでの fetch 用）
+          execSync(`git config credential.helper "store --file=\\"${this.credentialsFile}\\""`, {
+            cwd: targetPath,
+            stdio: 'pipe'
+          });
+
+          console.log(`[WorkspaceManager] 🔒 Secured origin URL for '${name}' (token removed from .git/config, saved to ${this.credentialsFile})`);
+        } catch (secErr: any) {
+          console.warn(`[WorkspaceManager] Warning: Failed to sanitize origin URL for ${name}:`, secErr.message);
+        }
+      }
 
       return { success: true, repoName: name };
     } catch (err: any) {

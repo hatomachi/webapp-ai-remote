@@ -56,10 +56,33 @@
     chdir: "{{ app_dir }}"
   changed_when: false
 
+- name: Ensure secure git credentials file exists with 0600 permissions
+  file:
+    path: "{{ base_data_dir }}/.git-credentials"
+    state: touch
+    owner: "{{ app_user }}"
+    group: "{{ resolved_group }}"
+    mode: '0600'
+    modification_time: preserve
+    access_time: preserve
+
 - name: Create shared group for multi-tenant AI sandbox
   group:
     name: "{{ sandbox_shared_group | default('ai-shared') }}"
     state: present
+
+- name: Block AWS IMDS (169.254.169.254) for AI sandbox users via iptables
+  iptables:
+    chain: OUTPUT
+    destination: 169.254.169.254
+    match: owner
+    gid_owner: "{{ sandbox_shared_group | default('ai-shared') }}"
+    jump: REJECT
+    reject_with: icmp-port-unreachable
+    action: append
+    state: present
+  when: not is_container and (enable_user_sandbox | default(true))
+  ignore_errors: yes
 
 - name: Configure sudoers for AI sandbox privilege dropping
   copy:
@@ -78,6 +101,7 @@
       HUB_URL={{ hub_url }}
       DEFAULT_CWD={{ workspaces_dir }}
       BASE_DATA_DIR={{ base_data_dir }}
+      GIT_CREDENTIALS_FILE={{ base_data_dir }}/.git-credentials
       ENABLE_USER_SANDBOX={{ 'true' if (enable_user_sandbox | default(true)) else 'false' }}
       SANDBOX_USER_PREFIX={{ sandbox_user_prefix | default('ai-') }}
       SANDBOX_SHARED_GROUP={{ sandbox_shared_group | default('ai-shared') }}

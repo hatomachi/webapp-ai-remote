@@ -37,6 +37,7 @@ export interface SandboxDiagnostic {
   executionMethod: SandboxExecutionMethod;
   canSudo: boolean;
   sharedGroupExists: boolean;
+  imdsBlocked: boolean;
 }
 
 /**
@@ -124,6 +125,14 @@ export class SandboxManager {
     }
 
     if (this.userExists(osUser)) {
+      // 既存ユーザーのプライマリグループが sharedGroup に設定されているか確認・整合
+      if (this.sharedGroup && this.groupExists(this.sharedGroup)) {
+        try {
+          const isRoot = process.getuid && process.getuid() === 0;
+          const sudoPrefix = isRoot ? '' : 'sudo ';
+          execSync(`${sudoPrefix}usermod -g "${this.sharedGroup}" "${osUser}"`, { stdio: 'pipe' });
+        } catch {}
+      }
       return { success: true, created: false };
     }
 
@@ -139,14 +148,16 @@ export class SandboxManager {
         }
       }
 
-      // 2. ユーザーを作成 (ホームディレクトリ作成 -m, ユーザー個別グループ -U, 共有グループ補助所属 -G, bashシェル -s /bin/bash)
+      // 2. ユーザーを作成 (ホームディレクトリ作成 -m, プライマリグループを sharedGroup に設定 -g, bashシェル -s /bin/bash)
+      // プライマリグループを sharedGroup にすることでプロセスの effective GID が確実に sharedGroup になり、
+      // iptables -m owner --gid-owner <sharedGroup> による IMDS (169.254.169.254) 遮断ルールが 100% 確実にマッチする。
       const isRoot = process.getuid && process.getuid() === 0;
       const sudoPrefix = isRoot ? '' : 'sudo ';
-      const groupArg = (this.sharedGroup && this.groupExists(this.sharedGroup)) ? `-G "${this.sharedGroup}"` : '';
+      const primaryGroupArg = (this.sharedGroup && this.groupExists(this.sharedGroup)) ? `-g "${this.sharedGroup}"` : '-U';
 
-      const createCmd = `${sudoPrefix}useradd -m -U -s /bin/bash ${groupArg} "${osUser}"`.replace(/\s+/g, ' ');
+      const createCmd = `${sudoPrefix}useradd -m ${primaryGroupArg} -s /bin/bash "${osUser}"`.replace(/\s+/g, ' ');
       execSync(createCmd, { stdio: 'pipe' });
-      console.log(`[SandboxManager] ✅ Created OS sandbox user: ${osUser}`);
+      console.log(`[SandboxManager] ✅ Created OS sandbox user: ${osUser} (primary group: ${this.sharedGroup || 'default'})`);
       return { success: true, created: true };
     } catch (err: any) {
       console.warn(`[SandboxManager] ⚠️ Failed to create OS user '${osUser}':`, err.message);
@@ -298,6 +309,60 @@ export class SandboxManager {
   }
 
   /**
+   * AWS メタデータ (169.254.169.254) 遮断用の iptables コマンド文字列を取得
+   * 非特権 OS ユーザー群（グループ: sharedGroup）からの IMDS 宛パケットを REJECT
+   */
+  public getImdsBlockCommands(): { checkCmd: string; applyCmd: string; groupName: string } {
+    const group = this.sharedGroup || 'ai-shared';
+    return {
+      groupName: group,
+      checkCmd: `iptables -C OUTPUT -m owner --gid-owner "${group}" -d 169.254.169.254 -j REJECT --reject-with icmp-port-unreachable`,
+      applyCmd: `iptables -A OUTPUT -m owner --gid-owner "${group}" -d 169.254.169.254 -j REJECT --reject-with icmp-port-unreachable`
+    };
+  }
+
+  /**
+   * AWS メタデータ遮断 iptables ルールが適用されているか確認
+   */
+  public isImdsBlocked(): boolean {
+    if (this.platform !== 'linux') return false;
+    const { checkCmd } = this.getImdsBlockCommands();
+    try {
+      const isRoot = process.getuid && process.getuid() === 0;
+      const sudoPrefix = isRoot ? '' : 'sudo -n ';
+      execSync(`${sudoPrefix}${checkCmd}`, { stdio: 'pipe' });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * AWS メタデータ遮断 iptables ルールを動的適用
+   */
+  public applyImdsBlockRule(): { success: boolean; applied: boolean; error?: string } {
+    if (!this.enabled || this.platform !== 'linux') {
+      return { success: true, applied: false };
+    }
+
+    if (this.isImdsBlocked()) {
+      return { success: true, applied: false };
+    }
+
+    const { applyCmd, groupName } = this.getImdsBlockCommands();
+    try {
+      const isRoot = process.getuid && process.getuid() === 0;
+      const sudoPrefix = isRoot ? '' : 'sudo -n ';
+      execSync(`${sudoPrefix}${applyCmd}`, { stdio: 'pipe' });
+      console.log(`[SandboxManager] 🛡️ Applied iptables IMDS block rule for group '${groupName}' -> 169.254.169.254 (REJECT)`);
+      return { success: true, applied: true };
+    } catch (err: any) {
+      console.warn(`[SandboxManager] ⚠️ Failed to apply iptables IMDS block rule:`, err.message);
+      return { success: false, applied: false, error: err.message };
+    }
+  }
+
+  /**
    * サンドボックス環境の自己診断
    */
   public diagnoseSandbox(): SandboxDiagnostic {
@@ -306,6 +371,7 @@ export class SandboxManager {
     let currentUid = -1;
     let canSudo = false;
     let sharedGroupExists = false;
+    let imdsBlocked = false;
 
     try {
       currentUid = process.getuid ? process.getuid() : -1;
@@ -324,6 +390,10 @@ export class SandboxManager {
       try {
         sharedGroupExists = this.groupExists(this.sharedGroup);
       } catch {}
+
+      try {
+        imdsBlocked = this.isImdsBlocked();
+      } catch {}
     }
 
     return {
@@ -333,7 +403,8 @@ export class SandboxManager {
       enabled: this.enabled,
       executionMethod: this.executionMethod,
       canSudo,
-      sharedGroupExists
+      sharedGroupExists,
+      imdsBlocked
     };
   }
 }

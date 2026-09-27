@@ -96,9 +96,23 @@ echo "  - Checking Systemd Service Template:"
 docker exec "$CONTAINER_NAME" test -f /etc/systemd/system/webapp-ai-remote-agent.service
 echo "    Agent systemd unit: OK"
 
+echo "  - Checking Secure Git Credentials File:"
+docker exec "$CONTAINER_NAME" test -f /data/.git-credentials
+CRED_PERM=$(docker exec "$CONTAINER_NAME" stat -c "%a" /data/.git-credentials 2>/dev/null || docker exec "$CONTAINER_NAME" stat -f "%OLp" /data/.git-credentials)
+echo "    /data/.git-credentials exists (permissions: $CRED_PERM): OK"
+if [ "$CRED_PERM" != "600" ]; then
+  echo "    ❌ ERROR: /data/.git-credentials permission is not 600 (was: $CRED_PERM)!"
+  exit 1
+fi
+
 echo "  - Checking Agent .env:"
 docker exec "$CONTAINER_NAME" test -f /opt/webapp-ai-remote/packages/agent/.env
-echo "    Agent .env file: OK"
+ENV_CONTENT=$(docker exec "$CONTAINER_NAME" cat /opt/webapp-ai-remote/packages/agent/.env)
+if ! echo "$ENV_CONTENT" | grep -q "GIT_CREDENTIALS_FILE=/data/.git-credentials"; then
+  echo "    ❌ ERROR: GIT_CREDENTIALS_FILE not found in agent .env!"
+  exit 1
+fi
+echo "    Agent .env file (with GIT_CREDENTIALS_FILE): OK"
 
 echo "6️⃣ Testing Idempotency (Second Run)..."
 SECOND_RUN=$(docker exec "$CONTAINER_NAME" bash -c "cd /tmp/webapp-ai-remote/infra/ansible && ansible-playbook -i localhost, -c local playbook.yml -e is_container=true -e app_user=root")

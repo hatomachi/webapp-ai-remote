@@ -4,12 +4,18 @@ import os from 'node:os';
 import { execSync } from 'node:child_process';
 import { SandboxManager, SandboxManagerOptions } from './sandboxManager.js';
 
+export interface GitLabHostCredential {
+  host: string;    // 例: "gitlab-sub.internal.example.com"
+  token: string;   // glpat-xxxx (サブGitLabのPAT)
+}
+
 export interface UserCredentials {
   userName?: string;
   userEmail?: string;
   copilotToken?: string;
   claudeApiKey?: string;
   gitlabToken?: string;
+  extraGitlabTokens?: GitLabHostCredential[];
 }
 
 export interface WorktreeInfo {

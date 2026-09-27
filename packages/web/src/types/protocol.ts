@@ -113,12 +113,18 @@ export interface ToolApprovalRequestMessage {
   timestamp: string;
 }
 
+export interface GitLabHostCredential {
+  host: string;    // 例: "gitlab-sub.internal.example.com"
+  token: string;   // glpat-xxxx (サブGitLabのPAT)
+}
+
 export interface UserCredentials {
   userName?: string;        // 例: "Taro Tanaka" (コミット名義・worktree名)
   userEmail?: string;       // 例: "tanaka@company.co.jp"
   copilotToken?: string;    // ghp_xxxx
   claudeApiKey?: string;    // sk-ant-xxxx
-  gitlabToken?: string;     // glpat-xxxx
+  gitlabToken?: string;     // glpat-xxxx (メインGitLabのPAT・認証兼用)
+  extraGitlabTokens?: GitLabHostCredential[]; // サブGitLabのPATリスト（後フェーズ用）
 }
 
 export interface AdminRepoItem {
@@ -289,6 +295,25 @@ export interface AdminCleanupWorkspaceMessage {
   credentials?: UserCredentials;
 }
 
+export interface VerifyCredentialsMessage {
+  type: 'verify_credentials';
+  credentials?: UserCredentials;
+}
+
+export interface VerifyCredentialsResultMessage {
+  type: 'verify_credentials_result';
+  success: boolean;
+  user?: {
+    username: string;
+    rawUsername: string;
+    email?: string;
+    name?: string;
+    provider: 'gitlab' | 'github' | 'anonymous';
+  };
+  error?: string;
+  timestamp: string;
+}
+
 export type OutboundMessage = (
   | SendPromptMessage
   | AbortMessage
@@ -302,6 +327,7 @@ export type OutboundMessage = (
   | AdminCloneRepoMessage
   | AdminListWorkspacesMessage
   | AdminCleanupWorkspaceMessage
+  | VerifyCredentialsMessage
 ) & BaseMessage;
 
 // --- App State Types ---
@@ -354,6 +380,7 @@ export interface SessionInfo {
   createdAt: string;
   updatedAt: string;
   messageCount: number;
+  owner?: string; // 所有者（GitLab username 等）
 }
 
 export type TransportMode = 'auto' | 'ws' | 'http';

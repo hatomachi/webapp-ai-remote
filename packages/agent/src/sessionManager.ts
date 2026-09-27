@@ -12,6 +12,7 @@ export interface SessionInfo {
   createdAt: string;
   updatedAt: string;
   messageCount: number;
+  owner?: string; // 所有者ユーザー名（例: "taro-tanaka"）
 }
 
 export interface ToolUseItem {
@@ -541,7 +542,7 @@ export async function parseCopilotEventsJsonlToMessages(
 /**
  * 統合セッション一覧を取得
  */
-export async function listSessions(projectId?: string, cwd?: string): Promise<SessionInfo[]> {
+export async function listSessions(projectId?: string, cwd?: string, owner?: string): Promise<SessionInfo[]> {
   const internalMap = loadInternalIndex();
   const claudeSessions = await scanClaudeProjects(cwd);
   const copilotSessions = await scanCopilotProjects(cwd);
@@ -561,6 +562,11 @@ export async function listSessions(projectId?: string, cwd?: string): Promise<Se
 
   let list = Array.from(internalMap.values());
 
+  // 所有者（owner）でフィルタリング: 他人のセッションは不可視化
+  if (owner) {
+    list = list.filter((s) => !s.owner || s.owner === owner);
+  }
+
   // プロジェクトや cwd でフィルタリング
   if (cwd) {
     list = list.filter((s) => s.cwd === cwd || s.cwd.endsWith(path.basename(cwd)));
@@ -577,7 +583,17 @@ export async function listSessions(projectId?: string, cwd?: string): Promise<Se
 /**
  * 特定セッションのメッセージ履歴を取得
  */
-export async function getSessionMessages(sessionId: string, cwd?: string): Promise<ChatMessage[]> {
+export async function getSessionMessages(sessionId: string, cwd?: string, owner?: string): Promise<ChatMessage[]> {
+  // 所有者チェック: 他人のセッションなら閲覧拒否
+  if (owner) {
+    const internalMap = loadInternalIndex();
+    const existing = internalMap.get(sessionId);
+    if (existing?.owner && existing.owner !== owner) {
+      console.warn(`[SessionManager] Access denied: session ${sessionId} belongs to ${existing.owner}, requested by ${owner}`);
+      return [];
+    }
+  }
+
   ensureStorageDir();
   const sessionFilePath = path.join(STORAGE_DIR, `${sessionId}.json`);
 
@@ -656,6 +672,7 @@ export function saveSessionHistory(
     projectId?: string;
     title?: string;
     engine?: 'claude' | 'copilot';
+    owner?: string;
   }
 ) {
   if (!sessionId) return;
@@ -680,6 +697,7 @@ export function saveSessionHistory(
     createdAt: existing?.createdAt || new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     messageCount: messages.length,
+    owner: meta.owner || existing?.owner,
   };
 
   index.set(sessionId, updated);
@@ -689,8 +707,18 @@ export function saveSessionHistory(
 /**
  * セッションを削除
  */
-export function deleteSession(sessionId: string): boolean {
+export function deleteSession(sessionId: string, owner?: string): boolean {
   ensureStorageDir();
+
+  const index = loadInternalIndex();
+  const target = index.get(sessionId);
+
+  // 所有者チェック: 他人のセッションなら削除拒否
+  if (owner && target?.owner && target.owner !== owner) {
+    console.warn(`[SessionManager] Delete denied: session ${sessionId} belongs to ${target.owner}, requested by ${owner}`);
+    return false;
+  }
+
   const sessionFilePath = path.join(STORAGE_DIR, `${sessionId}.json`);
   if (fs.existsSync(sessionFilePath)) {
     try {
@@ -698,7 +726,6 @@ export function deleteSession(sessionId: string): boolean {
     } catch {}
   }
 
-  const index = loadInternalIndex();
   const deleted = index.delete(sessionId);
   if (deleted) {
     saveInternalIndex(index);

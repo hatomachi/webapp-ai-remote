@@ -15,6 +15,7 @@ import {
 } from './sessionManager.js';
 import { CopilotTurnRunner } from './copilotRunner.js';
 import { WorkspaceManager, UserCredentials } from './workspaceManager.js';
+import { TokenAuthManager } from './tokenAuthManager.js';
 
 // .env ファイルの自動読み込み (Node 20+ 標準機能 or 簡易パーサー)
 function loadEnv() {
@@ -52,6 +53,7 @@ function loadEnv() {
 loadEnv();
 
 const workspaceManager = new WorkspaceManager();
+const tokenAuthManager = new TokenAuthManager();
 const copilotRunner = new CopilotTurnRunner({ sandboxManager: workspaceManager.sandboxManager });
 
 const isWindows = process.platform === 'win32';
@@ -371,11 +373,43 @@ async function handleClientMessage(msg: any) {
   console.log('[Agent] Received from Client:', msg.type);
 
   if (msg.type === 'prompt') {
+    const auth = await tokenAuthManager.authenticate(msg.credentials);
+    if (!auth.success) {
+      console.warn(`[Agent] Prompt rejected: ${auth.error}`);
+      sendToHub({
+        type: 'turn_error',
+        error: auth.error || '個人認証に失敗しました (401 Unauthorized)',
+        targetClientId: msg.clientId,
+        timestamp: new Date().toISOString()
+      });
+      return;
+    }
+
+    // 認証済みユーザー名を credentials に強制バインド（なりすましを物理的に無効化）
+    if (auth.user) {
+      if (!msg.credentials) msg.credentials = {};
+      msg.credentials.userName = auth.user.username;
+      msg.userName = auth.user.username;
+      if (auth.user.email && !msg.credentials.userEmail) {
+        msg.credentials.userEmail = auth.user.email;
+      }
+    }
+
     if (msg.engine === 'copilot') {
       executeCopilotTurn(msg);
     } else {
       executeClaudeTurn(msg);
     }
+  } else if (msg.type === 'verify_credentials') {
+    const auth = await tokenAuthManager.authenticate(msg.credentials);
+    sendToHub({
+      type: 'verify_credentials_result',
+      success: auth.success,
+      user: auth.user,
+      error: auth.error,
+      targetClientId: msg.clientId,
+      timestamp: new Date().toISOString()
+    });
   } else if (msg.type === 'abort') {
     abortCurrentTurn(msg.clientId, msg.userName || msg.credentials?.userName);
   } else if (msg.type === 'get_status') {
@@ -388,9 +422,11 @@ async function handleClientMessage(msg: any) {
       timestamp: new Date().toISOString()
     });
   } else if (msg.type === 'list_projects') {
+    const auth = await tokenAuthManager.authenticate(msg.credentials);
+    const targetUserName = auth.success && auth.user ? auth.user.username : msg.userName;
     let result;
     if (workspaceManager.isMultiTenant) {
-      result = workspaceManager.scanUserProjects(msg.userName, DEFAULT_CWD);
+      result = workspaceManager.scanUserProjects(targetUserName, DEFAULT_CWD);
     } else {
       result = scanProjects(msg.rootPath);
     }
@@ -402,7 +438,9 @@ async function handleClientMessage(msg: any) {
       timestamp: new Date().toISOString()
     });
   } else if (msg.type === 'list_sessions') {
-    const sessions = await listSessions(msg.projectId, msg.cwd);
+    const auth = await tokenAuthManager.authenticate(msg.credentials);
+    const owner = auth.success && auth.user ? auth.user.username : undefined;
+    const sessions = await listSessions(msg.projectId, msg.cwd, owner);
     sendToHub({
       type: 'sessions_list',
       sessions,
@@ -411,7 +449,9 @@ async function handleClientMessage(msg: any) {
       timestamp: new Date().toISOString()
     });
   } else if (msg.type === 'get_session_messages') {
-    const messages = await getSessionMessages(msg.sessionId, msg.cwd);
+    const auth = await tokenAuthManager.authenticate(msg.credentials);
+    const owner = auth.success && auth.user ? auth.user.username : undefined;
+    const messages = await getSessionMessages(msg.sessionId, msg.cwd, owner);
     sendToHub({
       type: 'session_messages',
       sessionId: msg.sessionId,
@@ -420,8 +460,10 @@ async function handleClientMessage(msg: any) {
       timestamp: new Date().toISOString()
     });
   } else if (msg.type === 'delete_session') {
-    deleteSession(msg.sessionId);
-    const sessions = await listSessions(undefined, msg.cwd);
+    const auth = await tokenAuthManager.authenticate(msg.credentials);
+    const owner = auth.success && auth.user ? auth.user.username : undefined;
+    deleteSession(msg.sessionId, owner);
+    const sessions = await listSessions(undefined, msg.cwd, owner);
     sendToHub({
       type: 'sessions_list',
       sessions,
@@ -496,9 +538,9 @@ async function handleClientMessage(msg: any) {
   } else if (msg.type === 'admin:cleanup_workspace') {
     const isAdmin = verifyAdminToken(msg.adminToken);
     const targetUser = workspaceManager.sanitizeUserName(msg.userName);
-    // 送信者名の特定: credentials.userName が最優先
-    const senderRaw = msg.credentials?.userName;
-    const senderUser = senderRaw ? workspaceManager.sanitizeUserName(senderRaw) : undefined;
+    // 送信者名の特定: 認証済みユーザー名を最優先
+    const auth = await tokenAuthManager.authenticate(msg.credentials);
+    const senderUser = auth.success && auth.user ? auth.user.username : (msg.credentials?.userName ? workspaceManager.sanitizeUserName(msg.credentials.userName) : undefined);
     const isSelf = Boolean(senderUser && targetUser && senderUser === targetUser);
 
     if (!isAdmin && !isSelf) {
@@ -859,6 +901,7 @@ async function executeCopilotTurn(params: {
             cwd: workDir,
             projectId: path.basename(workDir),
             engine: 'copilot',
+            owner: params.credentials?.userName,
           });
         } catch (err: any) {
           console.warn('[Agent] Failed to persist Copilot session messages:', err.message);
@@ -1242,6 +1285,7 @@ async function executeClaudeTurn(params: {
       }
 
       // セッションメッセージの永続化
+      const sessionOwner = params.credentials?.userName;
       try {
         if (assistantMsg.toolUses) {
           assistantMsg.toolUses = assistantMsg.toolUses.map((t) => ({ ...t, isRunning: false }));
@@ -1250,6 +1294,7 @@ async function executeClaudeTurn(params: {
         saveSessionHistory(capturedSessionId, updatedHistory, {
           cwd: workDir,
           projectId: path.basename(workDir),
+          owner: sessionOwner,
         });
       } catch (err: any) {
         console.warn('[Agent] Failed to persist session messages:', err.message);
@@ -1264,12 +1309,13 @@ async function executeClaudeTurn(params: {
         timestamp: new Date().toISOString()
       });
 
-      // 最新セッション一覧をブロードキャストして Client 側のドロワーを即時最新化
-      listSessions(undefined, workDir)
+      // 最新セッション一覧を本人 Client 側に通知してドロワーを即時最新化
+      listSessions(undefined, workDir, sessionOwner)
         .then((sessions) => {
           sendToHub({
             type: 'sessions_list',
             sessions,
+            targetClientId: params.clientId,
             timestamp: new Date().toISOString(),
           });
         })

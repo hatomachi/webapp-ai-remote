@@ -204,6 +204,18 @@ export function useRemoteSocket(onMessage: (msg: InboundMessage) => void) {
     timestamp: number;
   } | null>(null);
 
+  const [authStatus, setAuthStatus] = useState<{
+    verified: boolean;
+    user?: {
+      username: string;
+      rawUsername: string;
+      email?: string;
+      name?: string;
+      provider: 'gitlab' | 'github' | 'anonymous';
+    };
+    error?: string;
+  } | null>(null);
+
   const wsRef = useRef<WebSocket | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -238,6 +250,7 @@ export function useRemoteSocket(onMessage: (msg: InboundMessage) => void) {
       sendFn({
         type: 'list_projects',
         userName: settingsRef.current.userCredentials?.userName || undefined,
+        credentials: settingsRef.current.userCredentials,
       });
     } else if (msg.type === 'agent_status') {
       setIsAgentConnected(true);
@@ -247,6 +260,13 @@ export function useRemoteSocket(onMessage: (msg: InboundMessage) => void) {
       sendFn({
         type: 'list_projects',
         userName: settingsRef.current.userCredentials?.userName || undefined,
+        credentials: settingsRef.current.userCredentials,
+      });
+    } else if (msg.type === 'verify_credentials_result') {
+      setAuthStatus({
+        verified: (msg as any).success,
+        user: (msg as any).user,
+        error: (msg as any).error,
       });
     } else if (msg.type === 'projects_list') {
       setAvailableProjects(msg.projects);
@@ -725,19 +745,41 @@ export function useRemoteSocket(onMessage: (msg: InboundMessage) => void) {
       type: 'list_projects',
       rootPath,
       userName: userName || settings.userCredentials?.userName || undefined,
+      credentials: settingsRef.current.userCredentials,
     });
   }, [send, settings.userCredentials?.userName]);
 
   const listSessions = useCallback((projectId?: string, cwd?: string) => {
-    return send({ type: 'list_sessions', projectId, cwd });
+    return send({
+      type: 'list_sessions',
+      projectId,
+      cwd,
+      credentials: settingsRef.current.userCredentials,
+    });
   }, [send]);
 
   const getSessionMessages = useCallback((sessionId: string, cwd?: string) => {
-    return send({ type: 'get_session_messages', sessionId, cwd });
+    return send({
+      type: 'get_session_messages',
+      sessionId,
+      cwd,
+      credentials: settingsRef.current.userCredentials,
+    });
   }, [send]);
 
   const deleteSession = useCallback((sessionId: string) => {
-    return send({ type: 'delete_session', sessionId });
+    return send({
+      type: 'delete_session',
+      sessionId,
+      credentials: settingsRef.current.userCredentials,
+    });
+  }, [send]);
+
+  const verifyCredentials = useCallback((credentials?: UserCredentials) => {
+    return send({
+      type: 'verify_credentials',
+      credentials: credentials || settingsRef.current.userCredentials,
+    });
   }, [send]);
 
   const sendToolApproval = useCallback((
@@ -817,6 +859,9 @@ export function useRemoteSocket(onMessage: (msg: InboundMessage) => void) {
     sendPrompt,
     abort,
     reconnect: connect,
+    // 認証状態 & トークン検証関数
+    authStatus,
+    verifyCredentials,
     // Admin 状態 & 関数
     baseRepos,
     workspaces,

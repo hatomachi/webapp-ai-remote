@@ -25,7 +25,7 @@ import {
   Shield,
 } from 'lucide-react';
 import { getDefaultSettings, SocketSettings, DEFAULT_AVAILABLE_MODELS } from '../hooks/useRemoteSocket';
-import { TransportMode } from '../types/protocol';
+import { TransportMode, UserCredentials } from '../types/protocol';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -33,6 +33,18 @@ interface SettingsModalProps {
   currentSettings: SocketSettings;
   onSave: (settings: SocketSettings) => void;
   onResetMyWorkspace?: (userName: string) => void;
+  onVerifyCredentials?: (credentials: UserCredentials) => void;
+  authStatus?: {
+    verified: boolean;
+    user?: {
+      username: string;
+      rawUsername: string;
+      email?: string;
+      name?: string;
+      provider: 'gitlab' | 'github' | 'anonymous';
+    };
+    error?: string;
+  } | null;
   fontSize?: number;
   onChangeFontSize?: (size: number) => void;
 }
@@ -43,6 +55,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   currentSettings,
   onSave,
   onResetMyWorkspace,
+  onVerifyCredentials,
+  authStatus,
   fontSize = 15,
   onChangeFontSize,
 }) => {
@@ -70,6 +84,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [claudeApiKey, setClaudeApiKey] = useState(currentSettings.userCredentials?.claudeApiKey || '');
   const [gitlabToken, setGitlabToken] = useState(currentSettings.userCredentials?.gitlabToken || '');
   const [showTokens, setShowTokens] = useState(false);
+  const [isVerifying, setIsVerifying] = useState(false);
 
   // --- Phase 5-2: 管理者設定アコーディオン & ワークスペース自己初期化 ---
   const [isAdminAccordionOpen, setIsAdminAccordionOpen] = useState(Boolean(currentSettings.adminToken));
@@ -78,6 +93,21 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   useEffect(() => {
     setSelectedFontSize(fontSize);
   }, [fontSize]);
+
+  // トークン検証結果が届いたらユーザー名・メールアドレスを自動補完
+  useEffect(() => {
+    if (authStatus) {
+      setIsVerifying(false);
+      if (authStatus.verified && authStatus.user) {
+        if (authStatus.user.username) {
+          setUserName(authStatus.user.username);
+        }
+        if (authStatus.user.email && !userEmail) {
+          setUserEmail(authStatus.user.email);
+        }
+      }
+    }
+  }, [authStatus]);
 
   if (!isOpen) return null;
 
@@ -266,12 +296,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 <label className="block text-slate-400 font-medium mb-1 flex items-center space-x-1">
                   <User className="w-3 h-3 text-emerald-400" />
                   <span>メンバー名</span>
+                  {authStatus?.verified && authStatus.user && (
+                    <span className="text-[9px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 px-1 py-0.2 rounded font-mono">
+                      認証済
+                    </span>
+                  )}
                 </label>
                 <input
                   type="text"
                   value={userName}
                   onChange={(e) => setUserName(e.target.value)}
-                  placeholder="例: taro-tanaka"
+                  placeholder="例: taro-tanaka (PATから自動判定)"
                   className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-slate-100 font-mono text-xs outline-none focus:border-emerald-500 transition-colors"
                 />
               </div>
@@ -326,7 +361,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             <div>
               <label className="block text-slate-400 font-medium mb-1 flex items-center space-x-1">
                 <Key className="w-3 h-3 text-amber-400" />
-                <span>GitLab Private Token (任意)</span>
+                <span>GitLab Private Token (メインGitLab・個人認証兼用)</span>
               </label>
               <input
                 type={showTokens ? 'text' : 'password'}
@@ -337,8 +372,39 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               />
             </div>
 
+            {/* トークン検証ボタン & 認証結果インライン表示 */}
+            {onVerifyCredentials && (gitlabToken.trim() || copilotToken.trim()) && (
+              <div className="flex items-center justify-between pt-1 pb-1">
+                <button
+                  type="button"
+                  disabled={isVerifying}
+                  onClick={() => {
+                    setIsVerifying(true);
+                    onVerifyCredentials({
+                      gitlabToken: gitlabToken.trim(),
+                      copilotToken: copilotToken.trim(),
+                      userName: userName.trim(),
+                      userEmail: userEmail.trim(),
+                    });
+                  }}
+                  className="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-sky-300 text-[11px] font-medium transition-colors flex items-center space-x-1 disabled:opacity-50"
+                >
+                  <ShieldCheck className="w-3.5 h-3.5 text-sky-400" />
+                  <span>{isVerifying ? '検証中...' : 'トークンを検証 ＆ メンバー名取得'}</span>
+                </button>
+
+                {authStatus && (
+                  <span className={`text-[10px] ${authStatus.verified ? 'text-emerald-400' : 'text-rose-400'}`}>
+                    {authStatus.verified
+                      ? `✓ 認証成功 (${authStatus.user?.username})`
+                      : `✕ 失敗: ${authStatus.error || '無効なトークン'}`}
+                  </span>
+                )}
+              </div>
+            )}
+
             <div className="p-2 rounded-lg bg-emerald-950/30 border border-emerald-800/40 text-[10px] text-emerald-300 leading-relaxed">
-              🛡️ <strong>安全保護</strong>: トークンや名義はEC2上に一切保存されず、あなたのスマホ（localStorage）にのみ安全に保存されます。プロンプト実行時にのみ一時プロセス環境変数へ注入されます。
+              🛡️ <strong>安全保護</strong>: トークンや名義はEC2上に一切保存されず、あなたのスマホ（localStorage）にのみ安全に保存されます。メインGitLabのPATで正規の身元を自動確定し、プロンプト実行時にのみ一時プロセス環境変数へ注入されます。
             </div>
 
             {/* ワークスペース自己初期化 (Git Worktree リセット) */}

@@ -742,6 +742,8 @@ export function App() {
     requestWorkspaces,
     cloneBaseRepo,
     cleanupWorkspace,
+    authStatus,
+    verifyCredentials,
   } = useRemoteSocket(handleInboundMessage);
 
   // 利用可能モデルの変更時に選択中モデルを同期・フォールバック
@@ -1323,6 +1325,8 @@ export function App() {
         currentSettings={settings}
         onSave={updateSettings}
         onResetMyWorkspace={(user) => cleanupWorkspace(user)}
+        onVerifyCredentials={verifyCredentials}
+        authStatus={authStatus}
         fontSize={fontSize}
         onChangeFontSize={handleSelectFontSize}
       />
